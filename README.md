@@ -80,6 +80,14 @@ vercel env pull .env.local
 
 This pulls `BLOB_READ_WRITE_TOKEN` from your attached Blob store.
 
+For the chat route at `/chat`, also set an Anthropic API key:
+
+```bash
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
+```
+
+Add the value to `.env.local`, then restart the dev server after any environment variable changes.
+
 Then start the dev server:
 
 ```bash

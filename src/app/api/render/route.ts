@@ -5,14 +5,21 @@ import {
   uploadToVercelBlob,
 } from "@remotion/vercel";
 import { waitUntil } from "@vercel/functions";
+import { z } from "zod";
 import { COMP_NAME } from "../../../../types/constants";
 import { RenderRequest } from "../../../../types/schema";
+import { DynamicVideoProps, DYNAMIC_COMP_NAME } from "../../../../types/video-schema";
 import {
   bundleRemotionProject,
   formatSSE,
   type RenderProgress,
 } from "./helpers";
 import { restoreSnapshot } from "./restore-snapshot";
+
+const DynamicRenderRequest = z.object({
+  compositionId: z.literal(DYNAMIC_COMP_NAME),
+  inputProps: DynamicVideoProps,
+});
 
 export async function POST(req: Request) {
   const encoder = new TextEncoder();
@@ -27,7 +34,6 @@ export async function POST(req: Request) {
   }
 
   const payload = await req.json();
-  const body = RenderRequest.parse(payload);
 
   const send = async (message: RenderProgress) => {
     await writer.write(encoder.encode(formatSSE(message)));
@@ -35,6 +41,21 @@ export async function POST(req: Request) {
 
   const runRender = async () => {
     await send({ type: "phase", phase: "Creating sandbox...", progress: 0 });
+
+    // Determine composition ID and input props
+    let compositionId: string;
+    let inputProps: Record<string, unknown>;
+
+    if (payload.compositionId === DYNAMIC_COMP_NAME) {
+      const body = DynamicRenderRequest.parse(payload);
+      compositionId = DYNAMIC_COMP_NAME;
+      inputProps = body.inputProps as Record<string, unknown>;
+    } else {
+      const body = RenderRequest.parse(payload);
+      compositionId = COMP_NAME;
+      inputProps = body.inputProps as Record<string, unknown>;
+    }
+
     const sandbox = process.env.VERCEL
       ? await restoreSnapshot()
       : await createSandbox({
@@ -56,8 +77,8 @@ export async function POST(req: Request) {
 
       const { sandboxFilePath, contentType } = await renderMediaOnVercel({
         sandbox,
-        compositionId: COMP_NAME,
-        inputProps: body.inputProps,
+        compositionId,
+        inputProps,
         onProgress: async (update) => {
           switch (update.stage) {
             case "opening-browser":
