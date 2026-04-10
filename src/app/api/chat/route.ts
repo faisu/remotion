@@ -1,5 +1,36 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { DYNAMIC_COMP_NAME } from "../../../../types/video-schema";
+import {
+  DYNAMIC_COMP_NAME,
+  DynamicVideoProps,
+  type DynamicVideoPropsType,
+} from "../../../../types/video-schema";
+
+const LIMITS = {
+  MAX_MESSAGES: 20,
+  MAX_CHARS_PER_MESSAGE: 4_000,
+  MAX_TOTAL_CONTEXT_CHARS: 32_000,
+  MAX_TOOL_LOOPS: 3,
+} as const;
+
+function trimConversation(messages: ChatMessage[]): ChatMessage[] {
+  let trimmed = messages.slice(-LIMITS.MAX_MESSAGES);
+
+  trimmed = trimmed.map((m) => ({
+    ...m,
+    content:
+      m.content.length > LIMITS.MAX_CHARS_PER_MESSAGE
+        ? m.content.slice(0, LIMITS.MAX_CHARS_PER_MESSAGE - 12) + " [truncated]"
+        : m.content,
+  }));
+
+  let totalChars = trimmed.reduce((sum, m) => sum + m.content.length, 0);
+  while (totalChars > LIMITS.MAX_TOTAL_CONTEXT_CHARS && trimmed.length > 1) {
+    totalChars -= trimmed[0].content.length;
+    trimmed = trimmed.slice(1);
+  }
+
+  return trimmed;
+}
 
 const missingApiKeyMessage =
   "Missing ANTHROPIC_API_KEY. Add it to .env.local and restart the dev server.";
@@ -31,10 +62,20 @@ function getChatErrorMessage(error: unknown): string {
 const generateVideoTool: Anthropic.Tool = {
   name: "generate_video",
   description:
-    "Generate a dynamic animated video using Remotion. Use this when the user asks to create, generate, or make a video. Returns a URL to the rendered MP4 video.",
+    "Generate a dynamic animated video with scene-by-scene storytelling using text and AI-generated images.",
   input_schema: {
     type: "object" as const,
     properties: {
+      topic: {
+        type: "string",
+        description: "The topic to explain in the video",
+      },
+      mode: {
+        type: "string",
+        enum: ["short", "detailed", "narrated"],
+        description:
+          "Video depth mode: short (4-6 concise scenes), detailed (8-12 sections), narrated (longer scene paragraphs)",
+      },
       title: {
         type: "string",
         description: "Main title text displayed prominently in the video",
@@ -59,7 +100,41 @@ const generateVideoTool: Anthropic.Tool = {
       items: {
         type: "array",
         items: { type: "string" },
-        description: "Optional list of bullet points or key facts to display (max 6)",
+        description: "Legacy optional bullet points for the first scene (max 6)",
+      },
+      scenes: {
+        type: "array",
+        description: "Scene list to drive the timeline. Prefer this over items.",
+        items: {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            body: { type: "string" },
+            bullets: {
+              type: "array",
+              items: { type: "string" },
+              description: "Key points for this scene",
+            },
+            imagePrompt: {
+              type: "string",
+              description:
+                "Prompt used to generate a scene image. Keep visual, concrete, and style-aware.",
+            },
+            imageUrl: {
+              type: "string",
+              description: "Optional pre-existing image URL to use directly",
+            },
+            durationInSeconds: {
+              type: "number",
+              description: "Scene duration in seconds",
+            },
+            layout: {
+              type: "string",
+              enum: ["text", "image-left", "image-right", "image-background"],
+            },
+          },
+          required: ["title"],
+        },
       },
       style: {
         type: "string",
@@ -69,10 +144,10 @@ const generateVideoTool: Anthropic.Tool = {
       },
       durationInSeconds: {
         type: "number",
-        description: "Video duration in seconds (2-30, default 6)",
+        description: "Overall video duration in seconds (2-120)",
       },
     },
-    required: ["title"],
+    required: ["title", "mode"],
   },
 };
 
@@ -95,20 +170,11 @@ function formatSSE(event: ChatEvent): string {
 }
 
 async function runRenderAndStream(
-  input: Record<string, unknown>,
+  input: DynamicVideoPropsType,
   origin: string,
   send: (event: ChatEvent) => void,
 ): Promise<string> {
-  const videoProps = {
-    title: input.title ?? "Generated Video",
-    subtitle: input.subtitle ?? "",
-    backgroundColor: input.backgroundColor ?? "#0f172a",
-    accentColor: input.accentColor ?? "#6366f1",
-    textColor: input.textColor ?? "#ffffff",
-    items: input.items ?? [],
-    style: input.style ?? "minimal",
-    durationInSeconds: input.durationInSeconds ?? 6,
-  };
+  const videoProps = DynamicVideoProps.parse(input);
 
   const response = await fetch(`${origin}/api/render`, {
     method: "POST",
@@ -167,8 +233,180 @@ async function runRenderAndStream(
   return videoUrl;
 }
 
+function encodeImagePrompt(prompt: string): string {
+  return encodeURIComponent(prompt.trim().replace(/\s+/g, " "));
+}
+
+const IMAGE_FETCH_TIMEOUT_MS = 8000;
+const MIN_IMAGE_BYTES = 512;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+function hasKnownImageSignature(
+  bytes: Uint8Array,
+  contentType: string
+): boolean {
+  const ct = contentType.toLowerCase();
+  if (ct.includes("jpeg") || ct.includes("jpg")) {
+    return bytes[0] === 0xff && bytes[1] === 0xd8;
+  }
+  if (ct.includes("png")) {
+    return (
+      bytes[0] === 0x89 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x4e &&
+      bytes[3] === 0x47
+    );
+  }
+  if (ct.includes("webp")) {
+    return (
+      bytes[0] === 0x52 &&
+      bytes[1] === 0x49 &&
+      bytes[2] === 0x46 &&
+      bytes[3] === 0x46 &&
+      bytes[8] === 0x57 &&
+      bytes[9] === 0x45 &&
+      bytes[10] === 0x42 &&
+      bytes[11] === 0x50
+    );
+  }
+  if (ct.includes("gif")) {
+    return (
+      bytes[0] === 0x47 &&
+      bytes[1] === 0x49 &&
+      bytes[2] === 0x46 &&
+      bytes[3] === 0x38
+    );
+  }
+  return false;
+}
+
+async function validateRemoteImage(url: string): Promise<void> {
+  const response = await fetch(url, {
+    method: "GET",
+    cache: "no-store",
+    signal: AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`Image fetch failed with status ${response.status}`);
+  }
+
+  const contentType = (response.headers.get("content-type") || "").toLowerCase();
+  if (!contentType.startsWith("image/")) {
+    throw new Error(`Expected image content-type, got ${contentType || "unknown"}`);
+  }
+
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.length < MIN_IMAGE_BYTES) {
+    throw new Error(`Image payload too small (${bytes.length} bytes)`);
+  }
+  if (bytes.length > MAX_IMAGE_BYTES) {
+    throw new Error(`Image payload too large (${bytes.length} bytes)`);
+  }
+  if (!hasKnownImageSignature(bytes, contentType)) {
+    throw new Error(`Image signature mismatch for ${contentType}`);
+  }
+}
+
+async function generateSceneImage(prompt: string, seed: number): Promise<string> {
+  const encodedPrompt = encodeImagePrompt(prompt);
+  const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1280&height=720&model=flux&nologo=true&seed=${seed}&nocache=${Date.now()}`;
+  try {
+    await validateRemoteImage(pollinationsUrl);
+    return pollinationsUrl;
+  } catch {
+    const picsumUrl = `https://picsum.photos/seed/${seed}-dynamic-scene/1280/720.jpg`;
+    await validateRemoteImage(picsumUrl);
+    return picsumUrl;
+  }
+}
+
+function expandScenesByMode(props: DynamicVideoPropsType): DynamicVideoPropsType {
+  const minSceneCountByMode = {
+    short: 4,
+    detailed: 8,
+    narrated: 4,
+  } as const;
+  const target = minSceneCountByMode[props.mode];
+  if (props.scenes.length >= target) {
+    return props;
+  }
+
+  const baseTopic = props.topic || props.title;
+  const seedBullets = props.items.length
+    ? props.items
+    : ["Core idea", "Practical example", "Key takeaway"];
+
+  const generatedScenes = [...props.scenes];
+  while (generatedScenes.length < target) {
+    const index = generatedScenes.length + 1;
+    const seedBullet = seedBullets[(index - 1) % seedBullets.length];
+    generatedScenes.push({
+      title: `${baseTopic}: Part ${index}`,
+      body:
+        props.mode === "narrated"
+          ? `This segment explains ${seedBullet.toLowerCase()} in the context of ${baseTopic}.`
+          : `${seedBullet} for ${baseTopic}.`,
+      bullets:
+        props.mode === "narrated"
+          ? []
+          : [`Why it matters`, `What to look for`, `Actionable insight`],
+      layout: index % 2 === 0 ? "image-left" : "image-right",
+      imagePrompt: `${baseTopic}, ${seedBullet}, cinematic educational illustration`,
+      durationInSeconds: props.mode === "detailed" ? 4 : props.mode === "narrated" ? 6 : 3,
+    });
+  }
+
+  return DynamicVideoProps.parse({ ...props, scenes: generatedScenes });
+}
+
+async function attachGeneratedImages(
+  props: DynamicVideoPropsType,
+  send: (event: ChatEvent) => void,
+): Promise<DynamicVideoPropsType> {
+  send({
+    type: "render_progress",
+    phase: "Generating scene images...",
+    progress: 0.05,
+  });
+
+  const nextScenes: DynamicVideoPropsType["scenes"] = [];
+  for (const [index, scene] of props.scenes.entries()) {
+    if (scene.imageUrl) {
+      nextScenes.push(scene);
+      continue;
+    }
+
+    if (!scene.imagePrompt) {
+      nextScenes.push({ ...scene, layout: "text" });
+      continue;
+    }
+
+    try {
+      const imageUrl = await generateSceneImage(scene.imagePrompt, index + 1);
+      nextScenes.push({
+        ...scene,
+        imageUrl,
+        layout: scene.layout === "text" ? "image-background" : scene.layout,
+      });
+    } catch {
+      // Fallback to text-only if image generation fails for this scene.
+      nextScenes.push({
+        ...scene,
+        imageUrl: undefined,
+        layout: "text",
+      });
+    }
+  }
+
+  return DynamicVideoProps.parse({
+    ...props,
+    scenes: nextScenes,
+  });
+}
+
 export async function POST(req: Request) {
-  const { messages }: { messages: ChatMessage[] } = await req.json();
+  const { messages: rawMessages }: { messages: ChatMessage[] } = await req.json();
+  const messages = trimConversation(rawMessages);
 
   const origin = new URL(req.url).origin;
 
@@ -188,7 +426,8 @@ export async function POST(req: Request) {
         content: m.content,
       }));
 
-      // Agentic loop
+      let toolLoopCount = 0;
+
       while (true) {
         const response = await client.messages.create({
           model: "claude-opus-4-6",
@@ -196,6 +435,12 @@ export async function POST(req: Request) {
           system: `You are a helpful AI assistant that can chat naturally and also generate dynamic animated videos using Remotion.
 
 When a user asks you to create or generate a video, use the generate_video tool. Be creative with colors, styles, and content.
+
+Always return a scene-based payload:
+- mode: short, detailed, or narrated
+- scenes: structured scene list for the topic
+- each scene should have a focused title, body, and optional bullets
+- include imagePrompt for scenes where visuals improve comprehension
 
 For colors, use harmonious combinations. Some ideas:
 - Dark tech: backgroundColor=#0f172a, accentColor=#6366f1, textColor=#ffffff
@@ -221,11 +466,16 @@ After generating a video, tell the user it's ready and describe what was created
         }
 
         if (response.stop_reason === "tool_use") {
+          toolLoopCount++;
+          if (toolLoopCount > LIMITS.MAX_TOOL_LOOPS) {
+            send({ type: "text_delta", text: "\n\n(Reached tool call limit for this response.)" });
+            break;
+          }
+
           const toolUseBlocks = response.content.filter(
             (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
           );
 
-          // Add assistant turn
           apiMessages.push({ role: "assistant", content: response.content });
 
           const toolResults: Anthropic.ToolResultBlockParam[] = [];
@@ -233,10 +483,19 @@ After generating a video, tell the user it's ready and describe what was created
           for (const toolUse of toolUseBlocks) {
             if (toolUse.name === "generate_video") {
               const input = toolUse.input as Record<string, unknown>;
-              send({ type: "tool_start", name: "generate_video", input });
 
               try {
-                const videoUrl = await runRenderAndStream(input, origin, send);
+                const normalizedInput = DynamicVideoProps.parse(input);
+                const expandedInput = expandScenesByMode(normalizedInput);
+                const enrichedInput = await attachGeneratedImages(expandedInput, send);
+
+                send({
+                  type: "tool_start",
+                  name: "generate_video",
+                  input: enrichedInput as unknown as Record<string, unknown>,
+                });
+
+                const videoUrl = await runRenderAndStream(enrichedInput, origin, send);
                 toolResults.push({
                   type: "tool_result",
                   tool_use_id: toolUse.id,

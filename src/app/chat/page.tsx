@@ -1,13 +1,14 @@
 "use client";
 
 import { Player } from "@remotion/player";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { DynamicComp } from "../../remotion/DynamicComp";
 import {
   DYNAMIC_VIDEO_FPS,
   DYNAMIC_VIDEO_HEIGHT,
   DYNAMIC_VIDEO_WIDTH,
   DynamicVideoProps,
+  getDynamicDurationInSeconds,
 } from "../../../types/video-schema";
 import type { z } from "zod";
 
@@ -34,6 +35,19 @@ type ChatEvent =
   | { type: "render_error"; message: string }
   | { type: "done" }
   | { type: "error"; message: string };
+
+function appendDeltaWithSpacing(existing: string, incoming: string): string {
+  if (!existing || !incoming) return existing + incoming;
+  const lastChar = existing[existing.length - 1];
+  const firstChar = incoming[0];
+  const needsSpace =
+    !/\s/.test(lastChar) &&
+    !/\s/.test(firstChar) &&
+    /[A-Za-z0-9.!?)]/.test(lastChar) &&
+    /[A-Za-z0-9(]/.test(firstChar);
+
+  return needsSpace ? `${existing} ${incoming}` : existing + incoming;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -63,7 +77,7 @@ function VideoCard({
 
   const parsedProps = videoProps ?? DynamicVideoProps.parse({});
   const durationInFrames = Math.round(
-    (parsedProps.durationInSeconds ?? 6) * DYNAMIC_VIDEO_FPS
+    getDynamicDurationInSeconds(parsedProps) * DYNAMIC_VIDEO_FPS
   );
 
   return (
@@ -80,6 +94,10 @@ function VideoCard({
           <ProgressBar progress={renderState.progress} />
           {/* Live preview using player */}
           <div className="mt-3 rounded-lg overflow-hidden">
+            <div className="px-3 py-2 text-xs text-white/60 bg-black/20 border-b border-white/10">
+              Mode: <span className="text-white/85">{parsedProps.mode}</span> • Scenes:{" "}
+              <span className="text-white/85">{parsedProps.scenes.length}</span>
+            </div>
             <Player
               component={DynamicComp}
               inputProps={parsedProps}
@@ -99,6 +117,10 @@ function VideoCard({
       {renderState.status === "done" && (
         <div className="p-4">
           <div className="rounded-lg overflow-hidden mb-3">
+            <div className="px-3 py-2 text-xs text-white/60 bg-black/20 border-b border-white/10">
+              Mode: <span className="text-white/85">{parsedProps.mode}</span> • Scenes:{" "}
+              <span className="text-white/85">{parsedProps.scenes.length}</span>
+            </div>
             <Player
               component={DynamicComp}
               inputProps={parsedProps}
@@ -144,13 +166,69 @@ function VideoCard({
   );
 }
 
-function MessageBubble({ message }: { message: Message }) {
+function getVideoImprovementSuggestions(props: DynamicProps): { label: string; prompt: string }[] {
+  const suggestions: { label: string; prompt: string }[] = [];
+  const topic = props.topic || props.title;
+
+  if (props.style !== "cinematic") {
+    suggestions.push({
+      label: "Make it cinematic",
+      prompt: `Update the video about "${topic}": switch to cinematic style with dramatic colors while keeping the same content`,
+    });
+  }
+  if (props.style !== "bold") {
+    suggestions.push({
+      label: "Make it bolder",
+      prompt: `Update the video about "${topic}": switch to bold style with high-contrast colors while keeping the same content`,
+    });
+  }
+  if (props.scenes.length < 8) {
+    suggestions.push({
+      label: "Add more scenes",
+      prompt: `Update the video about "${topic}": expand to 8+ detailed scenes with more depth on each subtopic`,
+    });
+  }
+  if (props.mode !== "narrated") {
+    suggestions.push({
+      label: "Switch to narrated",
+      prompt: `Update the video about "${topic}": switch to narrated mode with longer, more descriptive scene text`,
+    });
+  }
+  suggestions.push({
+    label: "Change color palette",
+    prompt: `Update the video about "${topic}": use a completely different color palette while keeping the same content and structure`,
+  });
+  suggestions.push({
+    label: "Improve imagery",
+    prompt: `Update the video about "${topic}": enhance all scene image prompts to be more vivid and cinematic, and use image-based layouts`,
+  });
+
+  return suggestions.slice(0, 4);
+}
+
+function MessageBubble({
+  message,
+  isLatest,
+  onSendSuggestion,
+  isLoading,
+}: {
+  message: Message;
+  isLatest: boolean;
+  onSendSuggestion: (text: string) => void;
+  isLoading: boolean;
+}) {
   const isUser = message.role === "user";
+  const showSuggestions =
+    isLatest &&
+    !isUser &&
+    !isLoading &&
+    message.renderState?.status === "done" &&
+    message.videoProps;
 
   return (
     <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}>
       <div
-        className={`w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-semibold ${
+        className={`w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-xs font-semibold ${
           isUser ? "bg-indigo-600 text-white" : "bg-white/10 text-white/70"
         }`}
       >
@@ -164,7 +242,9 @@ function MessageBubble({ message }: { message: Message }) {
               : "bg-white/10 text-white/90 rounded-tl-sm"
           }`}
         >
-          {message.content || (
+          {message.content ? (
+            <div className="whitespace-pre-wrap">{message.content}</div>
+          ) : (
             <span className="flex gap-1 py-0.5">
               <span className="w-1.5 h-1.5 bg-white/50 rounded-full animate-bounce [animation-delay:0ms]" />
               <span className="w-1.5 h-1.5 bg-white/50 rounded-full animate-bounce [animation-delay:150ms]" />
@@ -178,6 +258,19 @@ function MessageBubble({ message }: { message: Message }) {
               renderState={message.renderState}
               videoProps={message.videoProps}
             />
+          </div>
+        )}
+        {showSuggestions && message.videoProps && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {getVideoImprovementSuggestions(message.videoProps).map((s) => (
+              <button
+                key={s.label}
+                onClick={() => onSendSuggestion(s.prompt)}
+                className="text-xs px-2.5 py-1 rounded-full border border-indigo-500/30 text-indigo-300 hover:text-indigo-200 hover:border-indigo-400/50 hover:bg-indigo-500/10 transition-all"
+              >
+                {s.label}
+              </button>
+            ))}
           </div>
         )}
       </div>
@@ -203,8 +296,7 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
-  const sendMessage = useCallback(async () => {
-    const text = input.trim();
+  const sendWithText = useCallback(async (text: string) => {
     if (!text || isLoading) return;
 
     const userMessage: Message = {
@@ -224,7 +316,6 @@ export default function ChatPage() {
     setInput("");
     setIsLoading(true);
 
-    // Build conversation history for API (exclude welcome message)
     const history = messages
       .filter((m) => m.id !== "welcome")
       .map((m) => ({ role: m.role, content: m.content }));
@@ -268,14 +359,13 @@ export default function ChatPage() {
             case "text_delta":
               updateAssistant((m) => ({
                 ...m,
-                content: m.content + event.text,
+                content: appendDeltaWithSpacing(m.content, event.text),
               }));
               scrollToBottom();
               break;
 
             case "tool_start":
               if (event.name === "generate_video") {
-                // Parse video props from tool input
                 const parsed = DynamicVideoProps.safeParse(event.input);
                 currentVideoProps = parsed.success
                   ? parsed.data
@@ -349,7 +439,11 @@ export default function ChatPage() {
       setIsLoading(false);
       inputRef.current?.focus();
     }
-  }, [input, isLoading, messages, scrollToBottom]);
+  }, [isLoading, messages, scrollToBottom]);
+
+  const sendMessage = useCallback(() => {
+    sendWithText(input.trim());
+  }, [input, sendWithText]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -364,6 +458,17 @@ export default function ChatPage() {
     "Generate a cinematic video about the ocean",
     "Create a tech startup announcement video",
   ];
+
+  const MAX_CONTEXT_CHARS = 32_000;
+  const contextUsed = useMemo(
+    () =>
+      messages
+        .filter((m) => m.id !== "welcome")
+        .reduce((sum, m) => sum + m.content.length, 0),
+    [messages],
+  );
+  const contextPct = Math.min(100, Math.round((contextUsed / MAX_CONTEXT_CHARS) * 100));
+  const contextWarning = contextPct >= 80;
 
   return (
     <div className="flex flex-col h-screen bg-[#0f172a] text-white">
@@ -390,8 +495,14 @@ export default function ChatPage() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
-        {messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
+        {messages.map((message, idx) => (
+          <MessageBubble
+            key={message.id}
+            message={message}
+            isLatest={idx === messages.length - 1}
+            onSendSuggestion={sendWithText}
+            isLoading={isLoading}
+          />
         ))}
 
         {/* Suggested prompts - only show when just welcome message */}
@@ -400,7 +511,7 @@ export default function ChatPage() {
             {suggestedPrompts.map((prompt) => (
               <button
                 key={prompt}
-                onClick={() => setInput(prompt)}
+                onClick={() => sendWithText(prompt)}
                 className="text-xs px-3 py-1.5 rounded-full border border-white/15 text-white/60 hover:text-white/90 hover:border-white/30 transition-all"
               >
                 {prompt}
@@ -428,7 +539,7 @@ export default function ChatPage() {
           <button
             onClick={sendMessage}
             disabled={!input.trim() || isLoading}
-            className="w-8 h-8 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed transition-all flex items-center justify-center flex-shrink-0"
+            className="w-8 h-8 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed transition-all flex items-center justify-center shrink-0"
           >
             {isLoading ? (
               <svg
@@ -457,9 +568,30 @@ export default function ChatPage() {
             )}
           </button>
         </div>
-        <p className="text-center text-xs text-white/20 mt-2">
-          Press Enter to send • Shift+Enter for new line
-        </p>
+        <div className="flex items-center justify-between mt-2 px-1">
+          <p className="text-xs text-white/20">
+            Enter to send • Shift+Enter for new line
+          </p>
+          <div className="flex items-center gap-2">
+            <div className="w-16 bg-white/10 rounded-full h-1 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-300 ${
+                  contextWarning ? "bg-amber-400" : "bg-white/25"
+                }`}
+                style={{ width: `${contextPct}%` }}
+              />
+            </div>
+            <span
+              className={`text-xs tabular-nums ${
+                contextWarning ? "text-amber-400" : "text-white/20"
+              }`}
+            >
+              {contextPct >= 100
+                ? "Context full"
+                : `${Math.round(contextUsed / 1000)}K / ${MAX_CONTEXT_CHARS / 1000}K`}
+            </span>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -13,6 +13,7 @@ import {
   DYNAMIC_VIDEO_HEIGHT,
   DYNAMIC_VIDEO_WIDTH,
   DynamicVideoProps,
+  getDynamicDurationInSeconds,
 } from "../../types/video-schema";
 import { DynamicComp } from "./DynamicComp";
 import { Main } from "./MyComp/Main";
@@ -50,7 +51,9 @@ export const RemotionRoot: React.FC = () => {
         height={DYNAMIC_VIDEO_HEIGHT}
         defaultProps={DynamicVideoProps.parse({})}
         calculateMetadata={async ({ props }) => {
-          const durationInSeconds = props.durationInSeconds ?? 6;
+          const durationInSeconds = getDynamicDurationInSeconds(
+            DynamicVideoProps.parse(props)
+          );
           return {
             durationInFrames: Math.round(durationInSeconds * DYNAMIC_VIDEO_FPS),
           };
