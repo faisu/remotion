@@ -4,6 +4,7 @@ import { Player } from "@remotion/player";
 import { useCallback, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { BridgeitLogo } from "../../components/BridgeitLogo";
 import { DynamicComp } from "../../remotion/DynamicComp";
 import {
   DYNAMIC_VIDEO_FPS,
@@ -1437,15 +1438,13 @@ export default function ChatPage() {
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="white">
-              <path d="M15 10l4.553-2.276A1 1 0 0121 8.723v6.554a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
-            </svg>
-          </div>
+          <BridgeitLogo className="w-8 h-8 shrink-0" />
           <div>
-            <h1 className="font-semibold text-sm">Remotion Chat</h1>
+            <h1 className="font-semibold text-sm">
+              Bridge<span className="text-indigo-400">it</span>
+            </h1>
             <p className="text-xs text-white/40">
-              Powered by Claude + Remotion
+              Built with Claude and Remotion
             </p>
           </div>
         </div>

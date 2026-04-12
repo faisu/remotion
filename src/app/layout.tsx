@@ -2,9 +2,9 @@ import { Metadata, Viewport } from "next";
 import "../../styles/global.css";
 
 export const metadata: Metadata = {
-  title: "RemotionAI — Generate Videos with AI + Remotion",
+  title: "Bridgeit — AI video generation (Remotion & Claude)",
   description:
-    "Describe any topic and watch as AI writes the script, sources imagery, and Remotion renders a polished animated video in seconds.",
+    "Describe any topic and watch as AI writes the script, sources imagery, and Bridgeit turns it into a polished animated video — built with Claude and Remotion.",
 };
 
 export const viewport: Viewport = {

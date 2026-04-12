@@ -2,6 +2,7 @@
 
 import type { NextPage } from "next";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { BridgeitLogo } from "../components/BridgeitLogo";
 
 function VideoIcon({ className }: { className?: string }) {
   return (
@@ -309,14 +310,9 @@ const Home: NextPage = () => {
 
       {/* Nav */}
       <nav className="relative z-10 flex items-center justify-between px-6 md:px-12 py-5 max-w-7xl mx-auto">
-        <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl bg-linear-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-            <VideoIcon className="w-[18px] h-[18px] text-white" />
-          </div>
-          <span className="font-semibold text-lg tracking-tight">
-            Remotion<span className="text-indigo-400">AI</span>
-          </span>
-        </div>
+        <a href="/" className="shrink-0" aria-label="Bridgeit home">
+          <BridgeitLogo className="w-9 h-9" />
+        </a>
         <div className="flex items-center gap-4">
           <a
             href="https://bridgeit.in"
@@ -324,7 +320,7 @@ const Home: NextPage = () => {
             rel="noreferrer"
             className="text-sm text-white/40 hover:text-white/70 transition-colors hidden sm:block"
           >
-            by Bridgeit.in
+            bridgeit.in
           </a>
           <a
             href="/chat"
@@ -357,7 +353,8 @@ const Home: NextPage = () => {
 
         <p className="text-lg md:text-xl text-white/50 max-w-2xl mx-auto mb-4 leading-relaxed">
           Describe any topic and watch as AI writes the script, sources imagery,
-          and Remotion renders a polished animated video — all in seconds.
+          and Bridgeit turns it into a polished animated video — built with Claude
+          and Remotion — in seconds.
         </p>
 
         <div className="h-8 mb-10 flex items-center justify-center">
@@ -415,7 +412,7 @@ const Home: NextPage = () => {
             </div>
             <div className="flex-1 flex justify-center">
               <div className="text-xs text-white/30 bg-white/5 rounded-lg px-4 py-1">
-                remotion-ai.vercel.app/chat
+                bridgeit.in/chat
               </div>
             </div>
           </div>
@@ -579,8 +576,8 @@ const Home: NextPage = () => {
               Ready to create your first video?
             </h2>
             <p className="text-white/40 mb-8 max-w-md mx-auto text-sm">
-              No editing skills needed. Just describe what you want and let AI +
-              Remotion handle the rest.
+              No editing skills needed. Just describe what you want — Bridgeit
+              uses Claude and Remotion to handle the rest.
             </p>
             <a
               href="/chat"
@@ -606,24 +603,12 @@ const Home: NextPage = () => {
       <footer className="relative z-10 border-t border-white/6 py-8 px-6 md:px-12">
         <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-lg bg-linear-to-br from-indigo-500 to-violet-600 flex items-center justify-center">
-              <VideoIcon className="w-3 h-3 text-white" />
-            </div>
+            <BridgeitLogo className="w-6 h-6 shrink-0" />
             <span className="text-sm text-white/30">
-              Remotion<span className="text-white/50">AI</span>
+              Bridge<span className="text-white/50">it</span>
             </span>
           </div>
           <p className="text-xs text-white/20">
-            Powered by{" "}
-            <a
-              href="https://bridgeit.in"
-              target="_blank"
-              rel="noreferrer"
-              className="text-white/30 hover:text-white/50 transition-colors"
-            >
-              Bridgeit.in
-            </a>
-            {" · "}
             Built with{" "}
             <a
               href="https://www.remotion.dev"
@@ -633,7 +618,7 @@ const Home: NextPage = () => {
             >
               Remotion
             </a>
-            {" & "}
+            {" and "}
             <a
               href="https://www.anthropic.com"
               target="_blank"
@@ -641,6 +626,15 @@ const Home: NextPage = () => {
               className="text-white/30 hover:text-white/50 transition-colors"
             >
               Claude
+            </a>
+            {" · "}
+            <a
+              href="https://bridgeit.in"
+              target="_blank"
+              rel="noreferrer"
+              className="text-white/30 hover:text-white/50 transition-colors"
+            >
+              bridgeit.in
             </a>
           </p>
         </div>
