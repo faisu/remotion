@@ -9,8 +9,13 @@ import {
   DynamicVideoProps,
   type DynamicVideoPropsType,
   VideoPlan,
+  videoPlanToDynamicProps,
   type VideoPlanType,
 } from "../../../../types/video-schema";
+import {
+  applyPlanMutation,
+  type PlanAction,
+} from "../../../lib/plan-mutations";
 
 const LIMITS = {
   MAX_MESSAGES: 20,
@@ -129,7 +134,8 @@ const generateVideoTool: Anthropic.Tool = {
             },
             imageUrl: {
               type: "string",
-              description: "Optional pre-existing image URL to use directly",
+              description:
+                "Optional pre-existing image URL to use directly. For approved storyboard renders, this must be copied from the matching scene previewImageUrl.",
             },
             durationInSeconds: {
               type: "number",
@@ -252,6 +258,48 @@ const createVideoPlanTool: Anthropic.Tool = {
   },
 };
 
+const editVideoPlanTool: Anthropic.Tool = {
+  name: "edit_video_plan",
+  description:
+    "Apply a mutation to an existing storyboard artifact (video plan) and return the updated plan for user review before rendering.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      plan: {
+        type: "object",
+        description:
+          "The current full VideoPlan JSON to mutate. Use the most recent plan from the conversation.",
+      },
+      action: {
+        type: "string",
+        enum: [
+          "update_scene",
+          "reorder_scenes",
+          "remove_scene",
+          "add_scene",
+          "update_globals",
+          "refresh_asset",
+        ],
+      },
+      sceneId: {
+        type: "string",
+        description: "Scene id for update_scene, remove_scene, or refresh_asset.",
+      },
+      sceneIds: {
+        type: "array",
+        items: { type: "string" },
+        description: "Ordered scene ids for reorder_scenes.",
+      },
+      data: {
+        type: "object",
+        description:
+          "Patch payload for update_scene, add_scene, or update_globals depending on action.",
+      },
+    },
+    required: ["plan", "action"],
+  },
+};
+
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
@@ -267,6 +315,94 @@ type ChatEvent =
   | { type: "render_error"; message: string }
   | { type: "done" }
   | { type: "error"; message: string };
+
+const PLAN_APPROVED_TAG = "[PLAN_APPROVED]";
+
+function getApprovedPlanFromContent(content: string): VideoPlanType | null {
+  if (!content.startsWith(PLAN_APPROVED_TAG)) return null;
+  const afterTag = content.slice(PLAN_APPROVED_TAG.length).trimStart();
+  const jsonStart = afterTag.indexOf("{");
+  if (jsonStart === -1) return null;
+
+  try {
+    const data = JSON.parse(afterTag.slice(jsonStart)) as unknown;
+    const parsed = VideoPlan.safeParse(data);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function getLastApprovedPlan(messages: ChatMessage[]): VideoPlanType | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role !== "user") continue;
+    const parsed = getApprovedPlanFromContent(messages[i].content);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+function parseEditAction(input: Record<string, unknown>): PlanAction {
+  const action = String(input.action);
+
+  switch (action) {
+    case "update_scene": {
+      const sceneId = String(input.sceneId || "");
+      if (!sceneId) throw new Error("update_scene requires sceneId");
+      return {
+        action,
+        sceneId,
+        data: ((input.data as Record<string, unknown> | undefined) ?? {}) as PlanAction extends {
+          action: "update_scene";
+          data: infer T;
+        }
+          ? T
+          : never,
+      };
+    }
+    case "reorder_scenes": {
+      const sceneIds = Array.isArray(input.sceneIds)
+        ? input.sceneIds.map((id) => String(id))
+        : [];
+      if (!sceneIds.length) throw new Error("reorder_scenes requires sceneIds");
+      return { action, sceneIds };
+    }
+    case "remove_scene": {
+      const sceneId = String(input.sceneId || "");
+      if (!sceneId) throw new Error("remove_scene requires sceneId");
+      return { action, sceneId };
+    }
+    case "add_scene": {
+      return {
+        action,
+        data: ((input.data as Record<string, unknown> | undefined) ?? {}) as PlanAction extends {
+          action: "add_scene";
+          data: infer T;
+        }
+          ? T
+          : never,
+      };
+    }
+    case "update_globals": {
+      return {
+        action,
+        data: ((input.data as Record<string, unknown> | undefined) ?? {}) as PlanAction extends {
+          action: "update_globals";
+          data: infer T;
+        }
+          ? T
+          : never,
+      };
+    }
+    case "refresh_asset": {
+      const sceneId = String(input.sceneId || "");
+      if (!sceneId) throw new Error("refresh_asset requires sceneId");
+      return { action, sceneId };
+    }
+    default:
+      throw new Error(`Unsupported edit action: ${action}`);
+  }
+}
 
 function formatSSE(event: ChatEvent): string {
   return `data: ${JSON.stringify(event)}\n\n`;
@@ -477,7 +613,7 @@ async function generateSceneImage(prompt: string, seed: number): Promise<string>
   }
 }
 
-async function fetchThumbnailUrl(prompt: string, seed: number): Promise<string | null> {
+async function fetchThumbnailUrl(prompt: string, seed = 1): Promise<string | null> {
   if (isBraveSearchConfigured()) {
     const query = toSearchQuery(prompt);
     try {
@@ -706,6 +842,26 @@ export async function POST(req: Request) {
 
   const run = async () => {
     try {
+      const approvedPlan = getLastApprovedPlan(messages);
+      if (approvedPlan) {
+        const approvedInput = DynamicVideoProps.parse(
+          videoPlanToDynamicProps(approvedPlan),
+        );
+        const enrichedInput = await attachGeneratedImages(approvedInput, send);
+        send({
+          type: "tool_start",
+          name: "generate_video",
+          input: enrichedInput as unknown as Record<string, unknown>,
+        });
+        await runRenderAndStream(enrichedInput, origin, send);
+        send({
+          type: "text_delta",
+          text: "Video generated from your approved storyboard.",
+        });
+        send({ type: "done" });
+        return;
+      }
+
       const client = createAnthropicClient();
       const apiMessages: Anthropic.MessageParam[] = messages.map((m) => ({
         role: m.role,
@@ -723,6 +879,7 @@ export async function POST(req: Request) {
 VIDEO CREATION WORKFLOW — TWO PHASES:
 1. PLAN PHASE: When a user asks to create a video, ALWAYS use the create_video_plan tool FIRST. This creates a storyboard the user can review, edit, and approve before rendering.
 2. RENDER PHASE: Only use generate_video when the user explicitly approves a plan (e.g. "looks good, generate it", "render it", "go ahead") or if the message contains "[PLAN_APPROVED]" with plan data. If the user says "skip planning" or "just generate it", you may use generate_video directly.
+3. ARTIFACT EDIT PHASE: If the user asks to modify planned scenes, graphics, order, timing, style, or colors, use edit_video_plan to mutate the existing storyboard artifact.
 
 When creating a plan, be thorough:
 - Include 4-12 scenes depending on mode (short=4-6, detailed=8-12, narrated=4-6)
@@ -739,10 +896,13 @@ Color palette ideas:
 - Nature: backgroundColor=#052e16, accentColor=#22c55e, textColor=#dcfce7
 - Minimal light: backgroundColor=#ffffff, accentColor=#6366f1, textColor=#0f172a
 
-After creating a plan, briefly describe what you've planned and invite the user to review, edit, or approve it.
+After creating a plan, run a plan check and ask 1-2 clarifying questions when key constraints are ambiguous (audience, tone, required facts, branding, duration). Do not push for approval until the user answers or says to proceed.
+When rendering from an approved plan, preserve image parity: for each scene, pass imageUrl from that scene's previewImageUrl in the approved plan.
+After editing a plan, summarize what changed and ask whether to keep refining or approve.
 After generating a video, tell the user it's ready and describe what was created.`,
           tools: [
             createVideoPlanTool,
+            editVideoPlanTool,
             generateVideoTool,
             ...(isBraveSearchConfigured() ? [webSearchTool] : []),
           ],
@@ -792,6 +952,28 @@ After generating a video, tell the user it's ready and describe what was created
                   type: "tool_result",
                   tool_use_id: toolUse.id,
                   content: `Error creating plan: ${(err as Error).message}`,
+                  is_error: true,
+                });
+              }
+            } else if (toolUse.name === "edit_video_plan") {
+              const input = toolUse.input as Record<string, unknown>;
+              try {
+                const parsedPlan = VideoPlan.parse(input.plan);
+                const mutation = parseEditAction(input);
+                const updatedPlan = await applyPlanMutation(parsedPlan, mutation, {
+                  fetchThumbnailForPrompt: fetchThumbnailUrl,
+                });
+                send({ type: "plan_updated", plan: updatedPlan });
+                toolResults.push({
+                  type: "tool_result",
+                  tool_use_id: toolUse.id,
+                  content: `Plan updated successfully. It now has ${updatedPlan.scenes.length} scenes and is ready for review or approval.`,
+                });
+              } catch (err) {
+                toolResults.push({
+                  type: "tool_result",
+                  tool_use_id: toolUse.id,
+                  content: `Error editing plan: ${(err as Error).message}`,
                   is_error: true,
                 });
               }

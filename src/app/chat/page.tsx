@@ -2,6 +2,8 @@
 
 import { Player } from "@remotion/player";
 import { useCallback, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { DynamicComp } from "../../remotion/DynamicComp";
 import {
   DYNAMIC_VIDEO_FPS,
@@ -202,6 +204,57 @@ const TEMPLATE_ICONS: Record<string, React.ReactNode> = {
       <line x1="8" y1="2" x2="8" y2="6" />
       <line x1="3" y1="10" x2="21" y2="10" />
     </svg>
+  ),
+};
+
+const markdownComponents = {
+  p: (props: React.ComponentPropsWithoutRef<"p">) => (
+    <p className="mb-2 last:mb-0 text-sm leading-relaxed text-white/90" {...props} />
+  ),
+  strong: (props: React.ComponentPropsWithoutRef<"strong">) => (
+    <strong className="font-semibold text-white" {...props} />
+  ),
+  em: (props: React.ComponentPropsWithoutRef<"em">) => (
+    <em className="italic text-white/90" {...props} />
+  ),
+  ul: (props: React.ComponentPropsWithoutRef<"ul">) => (
+    <ul className="mb-2 list-disc list-inside space-y-1 text-white/85" {...props} />
+  ),
+  ol: (props: React.ComponentPropsWithoutRef<"ol">) => (
+    <ol className="mb-2 list-decimal list-inside space-y-1 text-white/85" {...props} />
+  ),
+  li: (props: React.ComponentPropsWithoutRef<"li">) => (
+    <li className="text-sm leading-relaxed" {...props} />
+  ),
+  h1: (props: React.ComponentPropsWithoutRef<"h1">) => (
+    <h1 className="mt-3 mb-2 text-lg font-semibold text-white" {...props} />
+  ),
+  h2: (props: React.ComponentPropsWithoutRef<"h2">) => (
+    <h2 className="mt-3 mb-2 text-base font-semibold text-white" {...props} />
+  ),
+  h3: (props: React.ComponentPropsWithoutRef<"h3">) => (
+    <h3 className="mt-3 mb-1.5 text-sm font-semibold text-white" {...props} />
+  ),
+  hr: () => <hr className="my-3 border-white/15" />,
+  blockquote: (props: React.ComponentPropsWithoutRef<"blockquote">) => (
+    <blockquote className="my-2 border-l-2 border-indigo-400/60 pl-3 text-white/80" {...props} />
+  ),
+  table: (props: React.ComponentPropsWithoutRef<"table">) => (
+    <div className="my-2 overflow-x-auto">
+      <table className="min-w-full border-collapse text-xs text-white/85" {...props} />
+    </div>
+  ),
+  thead: (props: React.ComponentPropsWithoutRef<"thead">) => (
+    <thead className="bg-white/10" {...props} />
+  ),
+  th: (props: React.ComponentPropsWithoutRef<"th">) => (
+    <th className="border border-white/15 px-2 py-1 text-left font-semibold text-white" {...props} />
+  ),
+  td: (props: React.ComponentPropsWithoutRef<"td">) => (
+    <td className="border border-white/10 px-2 py-1 align-top text-white/80" {...props} />
+  ),
+  code: (props: React.ComponentPropsWithoutRef<"code">) => (
+    <code className="rounded bg-black/30 px-1 py-0.5 font-mono text-xs text-indigo-200" {...props} />
   ),
 };
 
@@ -667,7 +720,7 @@ function PlanArtifact({
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-400">
               <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" />
             </svg>
-            <span className="text-xs font-medium text-indigo-300/80">Video Plan</span>
+            <span className="text-xs font-medium text-indigo-300/80">Storyboard Artifact</span>
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300/60 border border-indigo-500/20">
               {plan.status}
             </span>
@@ -1076,7 +1129,15 @@ function MessageBubble({
                 <p className="text-white/85 text-xs mt-1.5 leading-relaxed">{planApproved.preamble}</p>
               </div>
             ) : message.content ? (
-              <div className="whitespace-pre-wrap wrap-break-word">{message.content}</div>
+              isUser ? (
+                <div className="whitespace-pre-wrap wrap-break-word">{message.content}</div>
+              ) : (
+                <div className="wrap-break-word">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                    {message.content}
+                  </ReactMarkdown>
+                </div>
+              )
             ) : (
               <span className="flex gap-1 py-0.5">
                 <span className="w-1.5 h-1.5 bg-white/50 rounded-full animate-bounce [animation-delay:0ms]" />
