@@ -2,6 +2,7 @@
   "name": "remotion",
   "version": "1.0.0",
   "private": true,
+  "packageManager": "pnpm@9.14.2",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.86.1",
     "@remotion/cli": "4.0.447",
@@ -45,6 +46,7 @@
     "postcss": "8.4.47",
     "prettier": "3.8.1",
     "tailwindcss": "4.2.0",
+    "tsx": "^4.21.0",
     "turbo": "2.8.6",
     "typescript": "5.9.3",
     "typescript-eslint": "8.46.0"
@@ -55,7 +57,7 @@
     "start": "next start",
     "lint": "eslint .",
     "remotion": "remotion studio",
-    "create-snapshot": "bun create-snapshot.ts",
+    "create-snapshot": "NODE_OPTIONS='--conditions=import' tsx create-snapshot.ts",
     "render": "remotion render"
   }
 }
