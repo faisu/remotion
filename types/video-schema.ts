@@ -115,3 +115,81 @@ export const DYNAMIC_COMP_NAME = "DynamicComp";
 export const DYNAMIC_VIDEO_FPS = 30;
 export const DYNAMIC_VIDEO_WIDTH = 1280;
 export const DYNAMIC_VIDEO_HEIGHT = 720;
+
+// ---------------------------------------------------------------------------
+// Plan Mode schemas
+// ---------------------------------------------------------------------------
+
+const PlanStatus = z.enum(["draft", "approved", "rendering", "done"]);
+const AssetStatus = z.enum(["pending", "found", "approved", "failed"]);
+const AssetType = z.enum(["image", "reference", "inspiration"]);
+
+export const PlanScene = z.object({
+  id: z.string(),
+  title: z.string().default("Scene"),
+  body: z.string().default(""),
+  bullets: z.array(z.string()).max(6).default([]),
+  layout: SceneLayout.default("text"),
+  imagePrompt: z.string().default(""),
+  previewImageUrl: z.string().optional(),
+  durationInSeconds: z.number().min(1).max(20).default(3),
+  notes: z.string().optional(),
+});
+
+export type PlanSceneType = z.infer<typeof PlanScene>;
+
+export const PlanAsset = z.object({
+  id: z.string(),
+  type: AssetType.default("image"),
+  prompt: z.string(),
+  url: z.string().optional(),
+  thumbnailUrl: z.string().optional(),
+  source: z.string().default("pending"),
+  sceneId: z.string().optional(),
+  status: AssetStatus.default("pending"),
+});
+
+export type PlanAssetType = z.infer<typeof PlanAsset>;
+
+export const VideoPlan = z.object({
+  id: z.string(),
+  status: PlanStatus.default("draft"),
+  title: z.string(),
+  topic: z.string(),
+  style: VisualStyle.default("minimal"),
+  mode: DynamicMode.default("short"),
+  colorPalette: z.object({
+    background: z.string().default("#0f172a"),
+    accent: z.string().default("#6366f1"),
+    text: z.string().default("#ffffff"),
+  }),
+  estimatedDuration: z.number().default(0),
+  scenes: z.array(PlanScene).max(MAX_DYNAMIC_SCENES).default([]),
+  assets: z.array(PlanAsset).default([]),
+});
+
+export type VideoPlanType = z.infer<typeof VideoPlan>;
+
+export function videoPlanToDynamicProps(plan: VideoPlanType): z.input<typeof DynamicVideoInput> {
+  return {
+    topic: plan.topic,
+    mode: plan.mode,
+    title: plan.title,
+    subtitle: "",
+    backgroundColor: plan.colorPalette.background,
+    accentColor: plan.colorPalette.accent,
+    textColor: plan.colorPalette.text,
+    items: [],
+    style: plan.style,
+    durationInSeconds: plan.estimatedDuration || undefined,
+    scenes: plan.scenes.map((s) => ({
+      title: s.title,
+      body: s.body,
+      bullets: s.bullets,
+      layout: s.layout,
+      imagePrompt: s.imagePrompt || undefined,
+      imageUrl: s.previewImageUrl || undefined,
+      durationInSeconds: s.durationInSeconds,
+    })),
+  };
+}

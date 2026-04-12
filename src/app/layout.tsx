@@ -2,8 +2,9 @@ import { Metadata, Viewport } from "next";
 import "../../styles/global.css";
 
 export const metadata: Metadata = {
-  title: "Remotion rendering on Vercel Sandbox",
-  description: "Remotion rendering on Vercel Sandbox",
+  title: "RemotionAI — Generate Videos with AI + Remotion",
+  description:
+    "Describe any topic and watch as AI writes the script, sources imagery, and Remotion renders a polished animated video in seconds.",
 };
 
 export const viewport: Viewport = {

@@ -1,8 +1,15 @@
 import Anthropic from "@anthropic-ai/sdk";
 import {
+  braveWebSearch,
+  isBraveSearchConfigured,
+  braveImageSearch,
+} from "../../../lib/brave-search";
+import {
   DYNAMIC_COMP_NAME,
   DynamicVideoProps,
   type DynamicVideoPropsType,
+  VideoPlan,
+  type VideoPlanType,
 } from "../../../../types/video-schema";
 
 const LIMITS = {
@@ -118,7 +125,7 @@ const generateVideoTool: Anthropic.Tool = {
             imagePrompt: {
               type: "string",
               description:
-                "Prompt used to generate a scene image. Keep visual, concrete, and style-aware.",
+                "Search query used to find a scene image. Write as a web image search query, e.g. 'solar panel farm aerial view' or 'DNA double helix 3D render'. Avoid words like 'illustration' or 'cinematic'.",
             },
             imageUrl: {
               type: "string",
@@ -151,6 +158,100 @@ const generateVideoTool: Anthropic.Tool = {
   },
 };
 
+const webSearchTool: Anthropic.Tool = {
+  name: "web_search",
+  description:
+    "Search the web for current information about a topic. Use this to research facts, recent events, or gather context before generating a video.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      query: {
+        type: "string",
+        description: "The search query to look up on the web",
+      },
+    },
+    required: ["query"],
+  },
+};
+
+const createVideoPlanTool: Anthropic.Tool = {
+  name: "create_video_plan",
+  description:
+    "Create a video plan (storyboard) for the user to review before rendering. The plan includes scenes, style, colors, and image prompts. The user can edit the plan and then approve it to generate the video. Always use this tool FIRST when the user asks for a video — do NOT call generate_video directly unless the user explicitly says to skip planning or approves an existing plan.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      topic: {
+        type: "string",
+        description: "The topic of the video",
+      },
+      title: {
+        type: "string",
+        description: "Main title text displayed in the video",
+      },
+      mode: {
+        type: "string",
+        enum: ["short", "detailed", "narrated"],
+        description:
+          "Video depth mode: short (4-6 scenes), detailed (8-12 scenes), narrated (longer paragraphs)",
+      },
+      style: {
+        type: "string",
+        enum: ["minimal", "bold", "cinematic"],
+        description:
+          "Visual style: minimal (clean), bold (high contrast), cinematic (dramatic)",
+      },
+      backgroundColor: {
+        type: "string",
+        description: "Background color hex code",
+      },
+      accentColor: {
+        type: "string",
+        description: "Accent/highlight color hex code",
+      },
+      textColor: {
+        type: "string",
+        description: "Text color hex code",
+      },
+      scenes: {
+        type: "array",
+        description: "Planned scene list for the storyboard",
+        items: {
+          type: "object",
+          properties: {
+            title: { type: "string", description: "Scene title" },
+            body: { type: "string", description: "Scene body text" },
+            bullets: {
+              type: "array",
+              items: { type: "string" },
+              description: "Key points for this scene",
+            },
+            imagePrompt: {
+              type: "string",
+              description:
+                "Search query for the scene image. Write as a web image search query.",
+            },
+            layout: {
+              type: "string",
+              enum: ["text", "image-left", "image-right", "image-background"],
+            },
+            durationInSeconds: {
+              type: "number",
+              description: "Scene duration in seconds",
+            },
+            notes: {
+              type: "string",
+              description: "Optional notes about this scene's purpose or reasoning",
+            },
+          },
+          required: ["title"],
+        },
+      },
+    },
+    required: ["title", "topic", "mode"],
+  },
+};
+
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
@@ -159,6 +260,8 @@ type ChatMessage = {
 type ChatEvent =
   | { type: "text_delta"; text: string }
   | { type: "tool_start"; name: string; input: Record<string, unknown> }
+  | { type: "plan_created"; plan: VideoPlanType }
+  | { type: "plan_updated"; plan: VideoPlanType }
   | { type: "render_progress"; phase: string; progress: number }
   | { type: "render_done"; url: string; size: number }
   | { type: "render_error"; message: string }
@@ -307,7 +410,61 @@ async function validateRemoteImage(url: string): Promise<void> {
   }
 }
 
+async function validateImageHead(url: string): Promise<void> {
+  const res = await fetch(url, {
+    method: "HEAD",
+    signal: AbortSignal.timeout(5000),
+    redirect: "follow",
+  });
+  if (!res.ok) {
+    throw new Error(`HEAD failed: ${res.status}`);
+  }
+  const ct = (res.headers.get("content-type") || "").toLowerCase();
+  if (!ct.startsWith("image/")) {
+    throw new Error(`Not an image: ${ct}`);
+  }
+}
+
+function toSearchQuery(prompt: string): string {
+  return prompt
+    .replace(/\b(cinematic|illustration|educational|artistic|dramatic|style-aware|abstract)\b/gi, "")
+    .replace(/,\s*,/g, ",")
+    .replace(/^\s*,|,\s*$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function tryBraveImageSearch(prompt: string): Promise<string | null> {
+  if (!isBraveSearchConfigured()) return null;
+  const query = toSearchQuery(prompt);
+  try {
+    const results = await braveImageSearch(query, 10);
+    for (const img of results) {
+      try {
+        await validateImageHead(img.url);
+        return img.url;
+      } catch {
+        if (img.thumbnail) {
+          try {
+            await validateImageHead(img.thumbnail);
+            return img.thumbnail;
+          } catch {
+            // thumbnail also failed
+          }
+        }
+        continue;
+      }
+    }
+  } catch {
+    // Brave search itself failed; fall through
+  }
+  return null;
+}
+
 async function generateSceneImage(prompt: string, seed: number): Promise<string> {
+  const braveUrl = await tryBraveImageSearch(prompt);
+  if (braveUrl) return braveUrl;
+
   const encodedPrompt = encodeImagePrompt(prompt);
   const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1280&height=720&model=flux&nologo=true&seed=${seed}&nocache=${Date.now()}`;
   try {
@@ -318,6 +475,133 @@ async function generateSceneImage(prompt: string, seed: number): Promise<string>
     await validateRemoteImage(picsumUrl);
     return picsumUrl;
   }
+}
+
+async function fetchThumbnailUrl(prompt: string, seed: number): Promise<string | null> {
+  if (isBraveSearchConfigured()) {
+    const query = toSearchQuery(prompt);
+    try {
+      const results = await braveImageSearch(query, 3);
+      for (const img of results) {
+        const url = img.thumbnail || img.url;
+        if (url) {
+          try {
+            await validateImageHead(url);
+            return url;
+          } catch {
+            continue;
+          }
+        }
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  const encoded = encodeImagePrompt(prompt);
+  const pollUrl = `https://image.pollinations.ai/prompt/${encoded}?width=320&height=180&model=flux&nologo=true&seed=${seed}`;
+  try {
+    await validateImageHead(pollUrl);
+    return pollUrl;
+  } catch {
+    // fall through
+  }
+
+  return `https://picsum.photos/seed/${seed}-thumb/320/180`;
+}
+
+function buildVideoPlan(
+  input: Record<string, unknown>,
+): VideoPlanType {
+  const planId = `plan-${Date.now()}`;
+  const mode = (input.mode as string) || "short";
+  const style = (input.style as string) || "minimal";
+  const defaultDuration =
+    mode === "detailed" ? 4 : mode === "narrated" ? 6 : 3;
+
+  const rawScenes = (input.scenes as Array<Record<string, unknown>>) || [];
+  const scenes = rawScenes.map((s, i) => ({
+    id: `scene-${i}`,
+    title: (s.title as string) || `Scene ${i + 1}`,
+    body: (s.body as string) || "",
+    bullets: ((s.bullets as string[]) || []).slice(0, 6),
+    layout: (s.layout as "text" | "image-left" | "image-right" | "image-background") || "text",
+    imagePrompt: (s.imagePrompt as string) || "",
+    durationInSeconds: (s.durationInSeconds as number) || defaultDuration,
+    notes: (s.notes as string) || undefined,
+  }));
+
+  const estimatedDuration = scenes.reduce(
+    (sum, s) => sum + s.durationInSeconds,
+    0,
+  );
+
+  return VideoPlan.parse({
+    id: planId,
+    status: "draft",
+    title: (input.title as string) || "Video",
+    topic: (input.topic as string) || (input.title as string) || "Video",
+    style,
+    mode,
+    colorPalette: {
+      background: (input.backgroundColor as string) || "#0f172a",
+      accent: (input.accentColor as string) || "#6366f1",
+      text: (input.textColor as string) || "#ffffff",
+    },
+    estimatedDuration,
+    scenes,
+    assets: scenes
+      .filter((s) => s.imagePrompt)
+      .map((s) => ({
+        id: `asset-${s.id}`,
+        type: "image",
+        prompt: s.imagePrompt,
+        source: "pending",
+        sceneId: s.id,
+        status: "pending",
+      })),
+  });
+}
+
+async function attachThumbnailsToPlan(
+  plan: VideoPlanType,
+  send: (event: ChatEvent) => void,
+): Promise<VideoPlanType> {
+  send({
+    type: "text_delta",
+    text: "",
+  });
+
+  const updatedScenes = [...plan.scenes];
+  const updatedAssets = [...plan.assets];
+
+  const thumbnailPromises = plan.scenes.map(async (scene, index) => {
+    if (!scene.imagePrompt) return;
+    try {
+      const thumbUrl = await fetchThumbnailUrl(scene.imagePrompt, index + 1);
+      if (thumbUrl) {
+        updatedScenes[index] = { ...scene, previewImageUrl: thumbUrl };
+        const assetIdx = updatedAssets.findIndex(
+          (a) => a.sceneId === scene.id,
+        );
+        const source = isBraveSearchConfigured() ? "brave" : "generated";
+        if (assetIdx >= 0) {
+          updatedAssets[assetIdx] = {
+            ...updatedAssets[assetIdx],
+            thumbnailUrl: thumbUrl,
+            status: "found",
+            source,
+          };
+        }
+      }
+    } catch {
+      // leave as pending
+    }
+  });
+
+  await Promise.allSettled(thumbnailPromises);
+
+  return { ...plan, scenes: updatedScenes, assets: updatedAssets };
 }
 
 function expandScenesByMode(props: DynamicVideoPropsType): DynamicVideoPropsType {
@@ -351,7 +635,7 @@ function expandScenesByMode(props: DynamicVideoPropsType): DynamicVideoPropsType
           ? []
           : [`Why it matters`, `What to look for`, `Actionable insight`],
       layout: index % 2 === 0 ? "image-left" : "image-right",
-      imagePrompt: `${baseTopic}, ${seedBullet}, cinematic educational illustration`,
+      imagePrompt: `${baseTopic} ${seedBullet} high quality photo`,
       durationInSeconds: props.mode === "detailed" ? 4 : props.mode === "narrated" ? 6 : 3,
     });
   }
@@ -365,7 +649,9 @@ async function attachGeneratedImages(
 ): Promise<DynamicVideoPropsType> {
   send({
     type: "render_progress",
-    phase: "Generating scene images...",
+    phase: isBraveSearchConfigured()
+      ? "Searching for scene images..."
+      : "Generating scene images...",
     progress: 0.05,
   });
 
@@ -430,27 +716,36 @@ export async function POST(req: Request) {
 
       while (true) {
         const response = await client.messages.create({
-          model: "claude-opus-4-6",
+          model: "claude-sonnet-4-6",
           max_tokens: 4096,
           system: `You are a helpful AI assistant that can chat naturally and also generate dynamic animated videos using Remotion.
 
-When a user asks you to create or generate a video, use the generate_video tool. Be creative with colors, styles, and content.
+VIDEO CREATION WORKFLOW — TWO PHASES:
+1. PLAN PHASE: When a user asks to create a video, ALWAYS use the create_video_plan tool FIRST. This creates a storyboard the user can review, edit, and approve before rendering.
+2. RENDER PHASE: Only use generate_video when the user explicitly approves a plan (e.g. "looks good, generate it", "render it", "go ahead") or if the message contains "[PLAN_APPROVED]" with plan data. If the user says "skip planning" or "just generate it", you may use generate_video directly.
 
-Always return a scene-based payload:
-- mode: short, detailed, or narrated
-- scenes: structured scene list for the topic
-- each scene should have a focused title, body, and optional bullets
-- include imagePrompt for scenes where visuals improve comprehension
+When creating a plan, be thorough:
+- Include 4-12 scenes depending on mode (short=4-6, detailed=8-12, narrated=4-6)
+- Each scene needs a title, body text, and imagePrompt
+- Write imagePrompt as specific search queries (e.g. "aerial view of Tokyo skyline at sunset" not "city illustration")
+- Add notes to explain the reasoning behind creative choices
+- Choose appropriate layouts: "text" for text-heavy, "image-left"/"image-right" for split, "image-background" for cinematic
+${isBraveSearchConfigured() ? "\nYou have access to a web_search tool. Use it to research factual topics, recent events, or any subject where up-to-date information would improve the video content. Search before creating a plan when the topic benefits from current data." : ""}
 
-For colors, use harmonious combinations. Some ideas:
+Color palette ideas:
 - Dark tech: backgroundColor=#0f172a, accentColor=#6366f1, textColor=#ffffff
 - Warm sunset: backgroundColor=#1a0a00, accentColor=#f97316, textColor=#fef3c7
 - Ocean: backgroundColor=#0c1445, accentColor=#06b6d4, textColor=#e0f7ff
 - Nature: backgroundColor=#052e16, accentColor=#22c55e, textColor=#dcfce7
 - Minimal light: backgroundColor=#ffffff, accentColor=#6366f1, textColor=#0f172a
 
+After creating a plan, briefly describe what you've planned and invite the user to review, edit, or approve it.
 After generating a video, tell the user it's ready and describe what was created.`,
-          tools: [generateVideoTool],
+          tools: [
+            createVideoPlanTool,
+            generateVideoTool,
+            ...(isBraveSearchConfigured() ? [webSearchTool] : []),
+          ],
           messages: apiMessages,
         });
 
@@ -481,7 +776,26 @@ After generating a video, tell the user it's ready and describe what was created
           const toolResults: Anthropic.ToolResultBlockParam[] = [];
 
           for (const toolUse of toolUseBlocks) {
-            if (toolUse.name === "generate_video") {
+            if (toolUse.name === "create_video_plan") {
+              const input = toolUse.input as Record<string, unknown>;
+              try {
+                const plan = buildVideoPlan(input);
+                const enrichedPlan = await attachThumbnailsToPlan(plan, send);
+                send({ type: "plan_created", plan: enrichedPlan });
+                toolResults.push({
+                  type: "tool_result",
+                  tool_use_id: toolUse.id,
+                  content: `Video plan created successfully with ${enrichedPlan.scenes.length} scenes. The user can now review, edit, and approve the plan to generate the video.`,
+                });
+              } catch (err) {
+                toolResults.push({
+                  type: "tool_result",
+                  tool_use_id: toolUse.id,
+                  content: `Error creating plan: ${(err as Error).message}`,
+                  is_error: true,
+                });
+              }
+            } else if (toolUse.name === "generate_video") {
               const input = toolUse.input as Record<string, unknown>;
 
               try {
@@ -506,6 +820,26 @@ After generating a video, tell the user it's ready and describe what was created
                   type: "tool_result",
                   tool_use_id: toolUse.id,
                   content: `Error generating video: ${(err as Error).message}`,
+                  is_error: true,
+                });
+              }
+            } else if (toolUse.name === "web_search") {
+              const { query } = toolUse.input as { query: string };
+              try {
+                const results = await braveWebSearch(query);
+                const formatted = results
+                  .map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.description}`)
+                  .join("\n\n");
+                toolResults.push({
+                  type: "tool_result",
+                  tool_use_id: toolUse.id,
+                  content: formatted || "No results found.",
+                });
+              } catch (err) {
+                toolResults.push({
+                  type: "tool_result",
+                  tool_use_id: toolUse.id,
+                  content: `Web search failed: ${(err as Error).message}`,
                   is_error: true,
                 });
               }
