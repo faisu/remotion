@@ -21,7 +21,7 @@ const LIMITS = {
   MAX_MESSAGES: 20,
   MAX_CHARS_PER_MESSAGE: 4_000,
   MAX_TOTAL_CONTEXT_CHARS: 32_000,
-  MAX_TOOL_LOOPS: 3,
+  MAX_TOOL_LOOPS: 10,
 } as const;
 
 function trimConversation(messages: ChatMessage[]): ChatMessage[] {
