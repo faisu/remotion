@@ -1,7 +1,7 @@
 "use client";
 
 import { Player } from "@remotion/player";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { BridgeitLogo } from "../../components/BridgeitLogo";
@@ -145,6 +145,22 @@ function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.round(seconds % 60);
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
+function resolveImageUrl(...candidates: Array<string | undefined>) {
+  for (const candidate of candidates) {
+    const value = candidate?.trim();
+    if (!value) continue;
+    if (
+      value.startsWith("http://") ||
+      value.startsWith("https://") ||
+      value.startsWith("data:image/") ||
+      value.startsWith("blob:")
+    ) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 const STYLE_LABELS: Record<string, string> = {
@@ -302,44 +318,80 @@ function SceneAssetPreview({
   scene: PlanSceneType;
   asset?: VideoPlanType["assets"][number];
 }) {
-  const imageUrl = scene.previewImageUrl || asset?.thumbnailUrl;
-  const status = asset?.status ?? (scene.imagePrompt ? "pending" : undefined);
-  if (!scene.imagePrompt && !imageUrl) return null;
+  const [imageLoadFailed, setImageLoadFailed] = useState(false);
+  const imageUrl = resolveImageUrl(
+    scene.previewImageUrl,
+    asset?.thumbnailUrl,
+    asset?.url,
+  );
+  const imagePrompt = scene.imagePrompt || asset?.prompt || "";
+  const hasImage = Boolean(imageUrl) && !imageLoadFailed;
+  const status =
+    imageLoadFailed || asset?.status === "failed"
+      ? "failed"
+      : hasImage
+        ? "found"
+        : asset?.status ?? (imagePrompt ? "pending" : "no-image");
+
+  useEffect(() => {
+    setImageLoadFailed(false);
+  }, [imageUrl]);
 
   return (
-    <div className="mt-2 rounded-lg overflow-hidden bg-white/5 border border-white/8 relative">
-      {imageUrl ? (
+    <div className="mt-2 rounded-lg overflow-hidden bg-white/5 border border-white/10 relative">
+      {hasImage ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={imageUrl}
-          alt={scene.imagePrompt || scene.title}
-          className="w-full h-24 object-cover"
+          alt={imagePrompt || scene.title}
+          className="w-full h-32 object-cover"
+          onError={() => setImageLoadFailed(true)}
         />
       ) : (
-        <div className="w-full h-24 flex items-center justify-center">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-white/15">
-            <rect x="3" y="3" width="18" height="18" rx="2" />
-            <circle cx="8.5" cy="8.5" r="1.5" />
-            <path d="M21 15l-5-5L5 21" />
-          </svg>
+        <div className="w-full h-32 flex items-center justify-center bg-linear-to-br from-white/5 to-white/0">
+          <div className="flex flex-col items-center gap-1.5 text-center px-3">
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              className="text-white/20"
+            >
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <circle cx="8.5" cy="8.5" r="1.5" />
+              <path d="M21 15l-5-5L5 21" />
+            </svg>
+            <p className="text-[10px] text-white/35">
+              {status === "pending"
+                ? "Searching for image preview..."
+                : status === "failed"
+                  ? "Image unavailable"
+                  : "No image prompt provided"}
+            </p>
+          </div>
         </div>
       )}
-      {status && (
+      <div className="absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-black/50 to-transparent pointer-events-none" />
+      {status !== "no-image" && (
         <span
           className={`absolute top-1.5 right-1.5 text-[9px] px-1.5 py-0.5 rounded-full backdrop-blur-sm ${
             status === "found"
               ? "bg-green-500/20 text-green-300/80"
               : status === "failed"
                 ? "bg-red-500/20 text-red-300/80"
-                : "bg-white/10 text-white/40"
+                : "bg-white/10 text-white/55"
           }`}
         >
           {status}
         </span>
       )}
-      {scene.imagePrompt && (
-        <div className="px-2 py-1 border-t border-white/6">
-          <p className="text-[9px] text-white/30 truncate">{scene.imagePrompt}</p>
+      {imagePrompt && (
+        <div className="px-2.5 py-1.5 border-t border-white/6">
+          <p className="text-[10px] text-white/40 leading-relaxed max-h-8 overflow-hidden" title={imagePrompt}>
+            {imagePrompt}
+          </p>
         </div>
       )}
     </div>
@@ -406,7 +458,7 @@ function PlanSceneCard({
           : "border-white/8 hover:border-white/15"
       }`}
     >
-      <div className="flex items-start justify-between gap-2 mb-2">
+      <div className="flex items-start justify-between gap-2 mb-2.5">
         <div className="flex items-center gap-2">
           {/* Drag handle */}
           <span className="cursor-grab active:cursor-grabbing text-white/20 hover:text-white/40 transition-colors select-none">
@@ -432,7 +484,7 @@ function PlanSceneCard({
             <h4 className="text-sm font-medium text-white/90">{scene.title}</h4>
           )}
         </div>
-        <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1">
           {!isEditing ? (
             <button
               onClick={() => setIsEditing(true)}
@@ -529,15 +581,17 @@ function PlanSceneCard({
       ) : (
         <>
           {scene.body && (
-            <p className="text-xs text-white/50 leading-relaxed mb-2">{scene.body}</p>
+            <p className="text-xs text-white/55 leading-relaxed mb-2">{scene.body}</p>
           )}
-          <div className="flex items-center gap-3 text-[10px] text-white/30">
-            <span>{scene.layout}</span>
-            <span>{scene.durationInSeconds}s</span>
+          <div className="flex items-center gap-1.5 text-[10px] text-white/35">
+            <span className="rounded-full border border-white/10 px-2 py-0.5">{scene.layout}</span>
+            <span className="rounded-full border border-white/10 px-2 py-0.5">
+              {scene.durationInSeconds}s
+            </span>
           </div>
           <SceneAssetPreview scene={scene} asset={asset} />
           {scene.notes && (
-            <p className="mt-1.5 text-[10px] text-indigo-300/50 italic">{scene.notes}</p>
+            <p className="mt-2 text-[10px] text-indigo-300/50 italic">{scene.notes}</p>
           )}
         </>
       )}
@@ -778,7 +832,7 @@ function PlanArtifact({
       </div>
 
       {/* Scenes */}
-      <div className="px-4 py-2 space-y-2 max-h-[500px] overflow-y-auto">
+      <div className="px-4 py-2.5 space-y-2.5 max-h-[520px] overflow-y-auto">
         {plan.scenes.map((scene, i) => (
           <PlanSceneCard
             key={scene.id}
