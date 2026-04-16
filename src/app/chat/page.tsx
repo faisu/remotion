@@ -311,12 +311,95 @@ function PlanTimeline({
   );
 }
 
-function SceneAssetPreview({
+type ImageStatus = "ok" | "pending" | "failed" | "no-image";
+
+function PendingImageSlot({
+  status,
+  prompt,
+  compact,
+}: {
+  status: Exclude<ImageStatus, "ok">;
+  prompt: string;
+  compact: boolean;
+}) {
+  return (
+    <div
+      className={`w-full h-full flex items-center justify-center bg-linear-to-br from-white/4 to-black/20 ${status === "pending" ? "animate-pulse" : ""}`}
+    >
+      <div className="flex flex-col items-center gap-1 text-center px-2 max-w-full">
+        {status === "pending" ? (
+          <svg
+            width={compact ? 12 : 16}
+            height={compact ? 12 : 16}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            className="text-white/30 animate-spin"
+            style={{ animationDuration: "1.6s" }}
+          >
+            <circle cx="12" cy="12" r="9" strokeDasharray="14 6" />
+          </svg>
+        ) : status === "failed" ? (
+          <svg
+            width={compact ? 12 : 16}
+            height={compact ? 12 : 16}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            className="text-red-400/40"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+        ) : (
+          <svg
+            width={compact ? 12 : 16}
+            height={compact ? 12 : 16}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            className="text-white/20"
+          >
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <path d="M21 15l-5-5L5 21" />
+          </svg>
+        )}
+        <p
+          className={`${compact ? "text-[6px]" : "text-[8px]"} text-white/40 leading-tight line-clamp-2`}
+        >
+          {status === "pending"
+            ? "Finding image..."
+            : status === "failed"
+              ? "Image unavailable"
+              : prompt || "No image"}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A 16:9 DOM mockup of how the scene will look in the final Remotion video.
+ * Mirrors DynamicComp/SceneCard layout logic (image-background, image-left,
+ * image-right, text) using the plan's color palette, style, and actual copy.
+ */
+function ScenePreviewMockup({
   scene,
+  palette,
   asset,
+  style,
+  compact = false,
 }: {
   scene: PlanSceneType;
+  palette: VideoPlanType["colorPalette"];
   asset?: VideoPlanType["assets"][number];
+  style: VideoPlanType["style"];
+  compact?: boolean;
 }) {
   const [imageLoadFailed, setImageLoadFailed] = useState(false);
   const imageUrl = resolveImageUrl(
@@ -326,75 +409,269 @@ function SceneAssetPreview({
   );
   const imagePrompt = scene.imagePrompt || asset?.prompt || "";
   const hasImage = Boolean(imageUrl) && !imageLoadFailed;
-  const status =
-    imageLoadFailed || asset?.status === "failed"
-      ? "failed"
-      : hasImage
-        ? "found"
-        : asset?.status ?? (imagePrompt ? "pending" : "no-image");
 
   useEffect(() => {
     setImageLoadFailed(false);
   }, [imageUrl]);
 
-  return (
-    <div className="mt-2 rounded-lg overflow-hidden bg-white/5 border border-white/10 relative">
-      {hasImage ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={imageUrl}
-          alt={imagePrompt || scene.title}
-          className="w-full h-32 object-cover"
-          onError={() => setImageLoadFailed(true)}
-        />
-      ) : (
-        <div className="w-full h-32 flex items-center justify-center bg-linear-to-br from-white/5 to-white/0">
-          <div className="flex flex-col items-center gap-1.5 text-center px-3">
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              className="text-white/20"
-            >
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <circle cx="8.5" cy="8.5" r="1.5" />
-              <path d="M21 15l-5-5L5 21" />
-            </svg>
-            <p className="text-[10px] text-white/35">
-              {status === "pending"
-                ? "Searching for image preview..."
-                : status === "failed"
-                  ? "Image unavailable"
-                  : "No image prompt provided"}
-            </p>
-          </div>
-        </div>
-      )}
-      <div className="absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-black/50 to-transparent pointer-events-none" />
-      {status !== "no-image" && (
-        <span
-          className={`absolute top-1.5 right-1.5 text-[9px] px-1.5 py-0.5 rounded-full backdrop-blur-sm ${
-            status === "found"
-              ? "bg-green-500/20 text-green-300/80"
-              : status === "failed"
-                ? "bg-red-500/20 text-red-300/80"
-                : "bg-white/10 text-white/55"
-          }`}
+  const wantsImage = scene.layout !== "text";
+  const imageStatus: Exclude<ImageStatus, "ok"> = imageLoadFailed || asset?.status === "failed"
+    ? "failed"
+    : wantsImage && (imagePrompt || asset?.status === "pending")
+      ? "pending"
+      : "no-image";
+
+  const imageOnLeft = scene.layout === "image-left";
+  const imageOnRight = scene.layout === "image-right";
+  const imageAsBackground = scene.layout === "image-background";
+  const hasSideImage = imageOnLeft || imageOnRight;
+
+  const titleCls = compact ? "text-[9px]" : "text-[12px]";
+  const bodyCls = compact ? "text-[6px]" : "text-[8px]";
+  const bulletCls = compact ? "text-[5px]" : "text-[7px]";
+
+  const textShadow = imageAsBackground
+    ? "0 1px 2px rgba(0,0,0,0.7), 0 0 6px rgba(0,0,0,0.35)"
+    : "none";
+
+  const fontWeight = style === "bold" ? 900 : 700;
+  const letterSpacing = style === "cinematic" ? "0.02em" : "normal";
+
+  const imageElement = hasImage ? (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={imageUrl}
+      alt={imagePrompt || scene.title}
+      className="absolute inset-0 w-full h-full object-cover"
+      onError={() => setImageLoadFailed(true)}
+    />
+  ) : (
+    <PendingImageSlot status={imageStatus} prompt={imagePrompt} compact={compact} />
+  );
+
+  const textContent = (
+    <div className={`${imageAsBackground ? "text-center" : "text-left"} max-w-full min-w-0`}>
+      <h4
+        className={`${titleCls} leading-tight m-0 truncate`}
+        style={{
+          color: palette.text,
+          fontWeight,
+          letterSpacing,
+          textShadow,
+        }}
+      >
+        {scene.title}
+      </h4>
+      {scene.body && (
+        <p
+          className={`${bodyCls} leading-snug mt-1 ${compact ? "line-clamp-2" : "line-clamp-3"}`}
+          style={{
+            color: palette.text,
+            opacity: 0.82,
+            textShadow,
+          }}
         >
-          {status}
-        </span>
+          {scene.body}
+        </p>
       )}
-      {imagePrompt && (
-        <div className="px-2.5 py-1.5 border-t border-white/6">
-          <p className="text-[10px] text-white/40 leading-relaxed max-h-8 overflow-hidden" title={imagePrompt}>
-            {imagePrompt}
-          </p>
+      {scene.bullets.length > 0 && !compact && (
+        <div className="mt-1.5 space-y-0.5">
+          {scene.bullets.slice(0, 3).map((b, i) => (
+            <div key={i} className="flex items-center gap-1 min-w-0">
+              <div
+                className="w-[3px] h-[3px] rounded-full shrink-0"
+                style={{ backgroundColor: palette.accent }}
+              />
+              <span
+                className={`${bulletCls} leading-tight truncate`}
+                style={{
+                  color: palette.text,
+                  opacity: 0.78,
+                  textShadow,
+                }}
+              >
+                {b}
+              </span>
+            </div>
+          ))}
         </div>
       )}
     </div>
+  );
+
+  return (
+    <div
+      className="relative w-full aspect-video rounded-lg overflow-hidden border border-white/5 shadow-inner"
+      style={{ backgroundColor: palette.background }}
+    >
+      <div
+        className="absolute top-0 left-0 right-0 h-[2px] z-20 pointer-events-none"
+        style={{ background: `linear-gradient(90deg, ${palette.accent}, transparent)` }}
+      />
+
+      {style === "cinematic" && (
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            background: `radial-gradient(ellipse at 70% 20%, ${palette.accent}22, transparent 55%)`,
+          }}
+        />
+      )}
+
+      {imageAsBackground ? (
+        <>
+          <div className="absolute inset-0">{imageElement}</div>
+          {hasImage && (
+            <div
+              className="absolute inset-0 pointer-events-none"
+              style={{
+                background:
+                  style === "cinematic"
+                    ? "linear-gradient(160deg, rgba(0,0,0,0.7), rgba(0,0,0,0.42))"
+                    : "linear-gradient(160deg, rgba(0,0,0,0.55), rgba(0,0,0,0.32))",
+              }}
+            />
+          )}
+          <div className="relative z-10 h-full flex items-center justify-center px-4">
+            {textContent}
+          </div>
+        </>
+      ) : hasSideImage ? (
+        <div className={`h-full flex ${imageOnLeft ? "flex-row-reverse" : "flex-row"}`}>
+          <div className="flex-1 flex items-center px-3 min-w-0">{textContent}</div>
+          <div className="flex-1 relative min-w-0">{imageElement}</div>
+        </div>
+      ) : (
+        <div className="h-full flex items-center justify-center px-4">
+          {textContent}
+        </div>
+      )}
+
+      <div
+        className="absolute bottom-1.5 left-2 pointer-events-none"
+        style={{
+          color: palette.text,
+          opacity: 0.35,
+          fontSize: compact ? 5 : 7,
+          textShadow,
+        }}
+      >
+        {scene.durationInSeconds}s
+      </div>
+    </div>
+  );
+}
+
+function LayoutIcon({ layout }: { layout: PlanSceneType["layout"] }) {
+  if (layout === "text") {
+    return (
+      <svg
+        width="12"
+        height="9"
+        viewBox="0 0 22 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      >
+        <rect x="1" y="1" width="20" height="14" rx="1.5" />
+        <line x1="5" y1="6" x2="17" y2="6" />
+        <line x1="7" y1="10" x2="15" y2="10" />
+      </svg>
+    );
+  }
+  if (layout === "image-left") {
+    return (
+      <svg
+        width="12"
+        height="9"
+        viewBox="0 0 22 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      >
+        <rect x="1" y="1" width="20" height="14" rx="1.5" />
+        <rect x="1" y="1" width="10" height="14" fill="currentColor" fillOpacity="0.3" />
+        <line x1="13" y1="6" x2="19" y2="6" />
+        <line x1="13" y1="10" x2="17" y2="10" />
+      </svg>
+    );
+  }
+  if (layout === "image-right") {
+    return (
+      <svg
+        width="12"
+        height="9"
+        viewBox="0 0 22 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      >
+        <rect x="1" y="1" width="20" height="14" rx="1.5" />
+        <rect x="11" y="1" width="10" height="14" fill="currentColor" fillOpacity="0.3" />
+        <line x1="3" y1="6" x2="9" y2="6" />
+        <line x1="3" y1="10" x2="8" y2="10" />
+      </svg>
+    );
+  }
+  return (
+    <svg
+      width="12"
+      height="9"
+      viewBox="0 0 22 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+    >
+      <rect x="1" y="1" width="20" height="14" rx="1.5" fill="currentColor" fillOpacity="0.3" />
+      <line x1="7" y1="8" x2="15" y2="8" />
+    </svg>
+  );
+}
+
+function StatusDot({
+  asset,
+  hasImage,
+  wantsImage,
+}: {
+  asset?: VideoPlanType["assets"][number];
+  hasImage: boolean;
+  wantsImage: boolean;
+}) {
+  if (!wantsImage) return null;
+
+  const state: "found" | "failed" | "pending" | "idle" = hasImage
+    ? "found"
+    : asset?.status === "failed"
+      ? "failed"
+      : asset?.status === "pending" || (!asset && wantsImage)
+        ? "pending"
+        : "idle";
+
+  const color =
+    state === "found"
+      ? "bg-emerald-400"
+      : state === "failed"
+        ? "bg-red-400"
+        : state === "pending"
+          ? "bg-amber-400"
+          : "bg-white/20";
+
+  const label =
+    state === "found"
+      ? "image ready"
+      : state === "failed"
+        ? "image failed"
+        : state === "pending"
+          ? "searching"
+          : "no image";
+
+  return (
+    <span className="flex items-center gap-1 text-[9px] text-white/40">
+      <span
+        className={`w-1.5 h-1.5 rounded-full ${color} ${state === "pending" ? "animate-pulse" : ""}`}
+      />
+      <span className="hidden sm:inline">{label}</span>
+    </span>
   );
 }
 
@@ -402,6 +679,8 @@ function PlanSceneCard({
   scene,
   index,
   asset,
+  palette,
+  style,
   onUpdate,
   onRemove,
   isDragOver,
@@ -409,10 +688,13 @@ function PlanSceneCard({
   onDragOver,
   onDragEnd,
   onDrop,
+  view,
 }: {
   scene: PlanSceneType;
   index: number;
   asset?: VideoPlanType["assets"][number];
+  palette: VideoPlanType["colorPalette"];
+  style: VideoPlanType["style"];
   onUpdate: (id: string, data: Partial<PlanSceneType>) => void;
   onRemove: (id: string) => void;
   isDragOver: boolean;
@@ -420,18 +702,37 @@ function PlanSceneCard({
   onDragOver: (e: React.DragEvent, index: number) => void;
   onDragEnd: () => void;
   onDrop: (e: React.DragEvent, index: number) => void;
+  view: "storyboard" | "outline";
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(scene.title);
   const [editBody, setEditBody] = useState(scene.body);
-  const [editPrompt, setEditPrompt] = useState(scene.imagePrompt);
   const [editDuration, setEditDuration] = useState(scene.durationInSeconds);
+  const [promptDraft, setPromptDraft] = useState(scene.imagePrompt);
+  const [showDetails, setShowDetails] = useState(false);
+
+  useEffect(() => {
+    setPromptDraft(scene.imagePrompt);
+  }, [scene.imagePrompt]);
+
+  useEffect(() => {
+    if (!isEditing) {
+      setEditTitle(scene.title);
+      setEditBody(scene.body);
+      setEditDuration(scene.durationInSeconds);
+    }
+  }, [isEditing, scene.title, scene.body, scene.durationInSeconds]);
+
+  const commitPrompt = useCallback(() => {
+    if (promptDraft !== scene.imagePrompt) {
+      onUpdate(scene.id, { imagePrompt: promptDraft });
+    }
+  }, [promptDraft, scene.id, scene.imagePrompt, onUpdate]);
 
   const handleSave = () => {
     onUpdate(scene.id, {
       title: editTitle,
       body: editBody,
-      imagePrompt: editPrompt,
       durationInSeconds: editDuration,
     });
     setIsEditing(false);
@@ -440,10 +741,18 @@ function PlanSceneCard({
   const handleCancel = () => {
     setEditTitle(scene.title);
     setEditBody(scene.body);
-    setEditPrompt(scene.imagePrompt);
     setEditDuration(scene.durationInSeconds);
     setIsEditing(false);
   };
+
+  const resolvedImageUrl = resolveImageUrl(
+    scene.previewImageUrl,
+    asset?.thumbnailUrl,
+    asset?.url,
+  );
+  const hasImage = Boolean(resolvedImageUrl);
+  const wantsImage = scene.layout !== "text";
+  const outline = view === "outline";
 
   return (
     <div
@@ -452,16 +761,18 @@ function PlanSceneCard({
       onDragOver={(e) => onDragOver(e, index)}
       onDragEnd={onDragEnd}
       onDrop={(e) => onDrop(e, index)}
-      className={`rounded-xl border bg-white/3 p-4 transition-colors ${
+      className={`group rounded-xl border bg-white/3 transition-colors ${
         isDragOver
           ? "border-indigo-400/50 bg-indigo-500/5"
           : "border-white/8 hover:border-white/15"
       }`}
     >
-      <div className="flex items-start justify-between gap-2 mb-2.5">
-        <div className="flex items-center gap-2">
-          {/* Drag handle */}
-          <span className="cursor-grab active:cursor-grabbing text-white/20 hover:text-white/40 transition-colors select-none">
+      <div className="flex items-center justify-between gap-2 px-3 pt-3">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <span
+            className="cursor-grab active:cursor-grabbing text-white/20 hover:text-white/40 transition-colors select-none shrink-0"
+            title="Drag to reorder"
+          >
             <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
               <circle cx="8" cy="4" r="2" />
               <circle cx="16" cy="4" r="2" />
@@ -471,24 +782,25 @@ function PlanSceneCard({
               <circle cx="16" cy="20" r="2" />
             </svg>
           </span>
-          <span className="text-[10px] font-bold text-white/30 bg-white/5 rounded px-1.5 py-0.5">
+          <span className="text-[10px] font-bold text-white/40 bg-white/5 rounded px-1.5 py-0.5 shrink-0 tabular-nums">
             {String(index + 1).padStart(2, "0")}
           </span>
           {isEditing ? (
             <input
               value={editTitle}
               onChange={(e) => setEditTitle(e.target.value)}
-              className="bg-white/5 border border-white/15 rounded px-2 py-0.5 text-sm text-white outline-none focus:border-indigo-500/50"
+              className="bg-white/5 border border-white/15 rounded px-2 py-0.5 text-sm text-white outline-none focus:border-indigo-500/50 flex-1 min-w-0"
             />
           ) : (
-            <h4 className="text-sm font-medium text-white/90">{scene.title}</h4>
+            <h4 className="text-sm font-medium text-white/90 truncate">{scene.title}</h4>
           )}
         </div>
-          <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5 shrink-0">
+          <StatusDot asset={asset} hasImage={hasImage} wantsImage={wantsImage} />
           {!isEditing ? (
             <button
               onClick={() => setIsEditing(true)}
-              className="text-white/30 hover:text-white/60 transition-colors p-1"
+              className="text-white/30 hover:text-white/60 transition-colors p-1 md:opacity-0 md:group-hover:opacity-100"
               title="Edit scene"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -521,7 +833,7 @@ function PlanSceneCard({
           )}
           <button
             onClick={() => onRemove(scene.id)}
-            className="text-white/20 hover:text-red-400/70 transition-colors p-1"
+            className="text-white/20 hover:text-red-400/70 transition-colors p-1 md:opacity-0 md:group-hover:opacity-100"
             title="Remove scene"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -532,8 +844,85 @@ function PlanSceneCard({
         </div>
       </div>
 
-      {isEditing ? (
-        <div className="space-y-2 mt-2">
+      <div className="px-3 pt-3">
+        <ScenePreviewMockup
+          scene={scene}
+          palette={palette}
+          asset={asset}
+          style={style}
+          compact={outline}
+        />
+      </div>
+
+      <div className="px-3 pt-2.5 pb-3 space-y-2">
+        <div className="flex items-center gap-1 flex-wrap">
+          <div className="flex items-center gap-1">
+            {LAYOUT_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => onUpdate(scene.id, { layout: opt.value })}
+                className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
+                  scene.layout === opt.value
+                    ? "border-indigo-500/50 text-indigo-300 bg-indigo-500/10"
+                    : "border-white/8 text-white/40 hover:text-white/60"
+                }`}
+                title={opt.label}
+              >
+                <LayoutIcon layout={opt.value} />
+                <span className="hidden md:inline">{opt.label}</span>
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1.5 ml-auto">
+            <input
+              type="range"
+              min={1}
+              max={20}
+              value={scene.durationInSeconds}
+              onChange={(e) =>
+                onUpdate(scene.id, { durationInSeconds: Number(e.target.value) })
+              }
+              className="w-16 accent-indigo-500"
+              title={`Duration: ${scene.durationInSeconds}s`}
+            />
+            <span className="text-[10px] text-white/50 tabular-nums w-6 text-right">
+              {scene.durationInSeconds}s
+            </span>
+          </div>
+        </div>
+
+        {wantsImage && (
+          <div className="flex items-center gap-1.5">
+            <svg
+              width="11"
+              height="11"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              className="text-white/30 shrink-0"
+            >
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <circle cx="8.5" cy="8.5" r="1.5" />
+              <path d="M21 15l-5-5L5 21" />
+            </svg>
+            <input
+              value={promptDraft}
+              onChange={(e) => setPromptDraft(e.target.value)}
+              onBlur={commitPrompt}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  (e.currentTarget as HTMLInputElement).blur();
+                }
+              }}
+              placeholder="Image search prompt..."
+              className="flex-1 min-w-0 bg-white/3 border border-white/8 rounded px-2 py-1 text-[11px] text-white/70 placeholder-white/20 outline-none focus:border-indigo-500/40 focus:bg-white/5 transition-colors"
+            />
+          </div>
+        )}
+
+        {isEditing && (
           <textarea
             value={editBody}
             onChange={(e) => setEditBody(e.target.value)}
@@ -541,60 +930,46 @@ function PlanSceneCard({
             rows={2}
             className="w-full bg-white/5 border border-white/15 rounded-lg px-3 py-2 text-xs text-white/80 outline-none focus:border-indigo-500/50 resize-none"
           />
-          <div className="flex gap-2">
-            <input
-              value={editPrompt}
-              onChange={(e) => setEditPrompt(e.target.value)}
-              placeholder="Image search prompt..."
-              className="flex-1 bg-white/5 border border-white/15 rounded px-2 py-1 text-xs text-white/70 outline-none focus:border-indigo-500/50"
-            />
-            <div className="flex items-center gap-1">
-              <input
-                type="range"
-                min={1}
-                max={20}
-                value={editDuration}
-                onChange={(e) => setEditDuration(Number(e.target.value))}
-                className="w-16 accent-indigo-500"
-              />
-              <span className="text-[10px] text-white/40 w-6">{editDuration}s</span>
-            </div>
-          </div>
-          <div className="flex gap-1">
-            {LAYOUT_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                onClick={() =>
-                  onUpdate(scene.id, { layout: opt.value })
-                }
-                className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
-                  scene.layout === opt.value
-                    ? "border-indigo-500/50 text-indigo-300 bg-indigo-500/10"
-                    : "border-white/10 text-white/40 hover:text-white/60"
-                }`}
+        )}
+
+        {!isEditing && (scene.body || scene.bullets.length > 0) && (
+          <div>
+            <button
+              onClick={() => setShowDetails((s) => !s)}
+              className="text-[10px] text-white/35 hover:text-white/55 transition-colors flex items-center gap-1"
+            >
+              <svg
+                width="9"
+                height="9"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                className={`transition-transform ${showDetails ? "rotate-90" : ""}`}
               >
-                {opt.label}
-              </button>
-            ))}
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+              {showDetails ? "Hide details" : "Show details"}
+            </button>
+            {showDetails && (
+              <div className="mt-1.5 space-y-1 text-[11px] text-white/55 leading-relaxed">
+                {scene.body && <p>{scene.body}</p>}
+                {scene.bullets.length > 0 && (
+                  <ul className="list-disc list-inside space-y-0.5 text-white/45">
+                    {scene.bullets.map((b, i) => (
+                      <li key={`${scene.id}-b${i}`}>{b}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </div>
-        </div>
-      ) : (
-        <>
-          {scene.body && (
-            <p className="text-xs text-white/55 leading-relaxed mb-2">{scene.body}</p>
-          )}
-          <div className="flex items-center gap-1.5 text-[10px] text-white/35">
-            <span className="rounded-full border border-white/10 px-2 py-0.5">{scene.layout}</span>
-            <span className="rounded-full border border-white/10 px-2 py-0.5">
-              {scene.durationInSeconds}s
-            </span>
-          </div>
-          <SceneAssetPreview scene={scene} asset={asset} />
-          {scene.notes && (
-            <p className="mt-2 text-[10px] text-indigo-300/50 italic">{scene.notes}</p>
-          )}
-        </>
-      )}
+        )}
+
+        {scene.notes && (
+          <p className="text-[10px] text-indigo-300/50 italic">{scene.notes}</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -766,30 +1141,34 @@ function PlanArtifact({
     return map;
   }, [plan.assets]);
 
+  const [view, setView] = useState<"storyboard" | "outline">("storyboard");
+
   return (
     <div className="mt-3 rounded-xl border border-indigo-500/20 bg-indigo-500/3 overflow-hidden">
       {/* Header */}
       <div className="px-4 py-3 border-b border-white/8 bg-white/2">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-400">
+        <div className="flex items-center justify-between mb-2 gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-400 shrink-0">
               <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" />
             </svg>
-            <span className="text-xs font-medium text-indigo-300/80">Storyboard Artifact</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300/60 border border-indigo-500/20">
+            <span className="text-xs font-medium text-indigo-300/80 shrink-0">Storyboard Artifact</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300/60 border border-indigo-500/20 shrink-0">
               {plan.status}
             </span>
           </div>
-          <span className="text-[10px] text-white/30">
-            {formatDuration(plan.estimatedDuration)}
-          </span>
+          <div className="flex items-center gap-2 shrink-0 text-[10px] text-white/40 tabular-nums">
+            <span>{plan.scenes.length} scene{plan.scenes.length === 1 ? "" : "s"}</span>
+            <span className="text-white/20">·</span>
+            <span>{formatDuration(plan.estimatedDuration)}</span>
+          </div>
         </div>
         <h3 className="text-sm font-semibold text-white/90">{plan.title}</h3>
         <p className="text-xs text-white/40 mt-0.5">{plan.topic}</p>
       </div>
 
       {/* Style & Mode badges + Color palette */}
-      <div className="px-4 py-2.5 border-b border-white/6 flex items-center justify-between">
+      <div className="px-4 py-2.5 border-b border-white/6 flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2">
           {(["minimal", "bold", "cinematic"] as const).map((s) => (
             <button
@@ -831,14 +1210,65 @@ function PlanArtifact({
         <PlanTimeline scenes={plan.scenes} accentColor={plan.colorPalette.accent} />
       </div>
 
+      {/* View toggle */}
+      <div className="px-4 pt-1 pb-2 flex items-center justify-between">
+        <p className="text-[10px] uppercase tracking-wider text-white/25 font-medium">Scenes</p>
+        <div className="inline-flex items-center rounded-full border border-white/8 bg-white/3 p-0.5">
+          <button
+            onClick={() => setView("storyboard")}
+            className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded-full transition-colors ${
+              view === "storyboard"
+                ? "bg-white/10 text-white/85"
+                : "text-white/40 hover:text-white/60"
+            }`}
+            title="Storyboard view"
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="3" width="7" height="7" />
+              <rect x="14" y="3" width="7" height="7" />
+              <rect x="3" y="14" width="7" height="7" />
+              <rect x="14" y="14" width="7" height="7" />
+            </svg>
+            Storyboard
+          </button>
+          <button
+            onClick={() => setView("outline")}
+            className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded-full transition-colors ${
+              view === "outline"
+                ? "bg-white/10 text-white/85"
+                : "text-white/40 hover:text-white/60"
+            }`}
+            title="Outline view"
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="8" y1="6" x2="21" y2="6" />
+              <line x1="8" y1="12" x2="21" y2="12" />
+              <line x1="8" y1="18" x2="21" y2="18" />
+              <line x1="3" y1="6" x2="3.01" y2="6" />
+              <line x1="3" y1="12" x2="3.01" y2="12" />
+              <line x1="3" y1="18" x2="3.01" y2="18" />
+            </svg>
+            Outline
+          </button>
+        </div>
+      </div>
+
       {/* Scenes */}
-      <div className="px-4 py-2.5 space-y-2.5 max-h-[520px] overflow-y-auto">
+      <div
+        className={`px-4 pb-2.5 max-h-[640px] overflow-y-auto ${
+          view === "storyboard"
+            ? "grid grid-cols-1 md:grid-cols-2 gap-2.5"
+            : "flex flex-col gap-2.5"
+        }`}
+      >
         {plan.scenes.map((scene, i) => (
           <PlanSceneCard
             key={scene.id}
             scene={scene}
             index={i}
             asset={assetMap.get(scene.id)}
+            palette={plan.colorPalette}
+            style={plan.style}
             onUpdate={handleSceneUpdate}
             onRemove={handleSceneRemove}
             isDragOver={dragOverIndex === i && dragIndex !== i}
@@ -846,11 +1276,14 @@ function PlanArtifact({
             onDragOver={handleDragOver}
             onDragEnd={handleDragEnd}
             onDrop={handleDrop}
+            view={view}
           />
         ))}
         <button
           onClick={handleAddScene}
-          className="w-full rounded-xl border border-dashed border-white/10 hover:border-white/20 text-white/30 hover:text-white/50 text-xs py-2.5 transition-colors flex items-center justify-center gap-1.5"
+          className={`rounded-xl border border-dashed border-white/10 hover:border-white/20 text-white/30 hover:text-white/50 text-xs transition-colors flex items-center justify-center gap-1.5 ${
+            view === "storyboard" ? "aspect-video md:aspect-auto md:min-h-32" : "py-2.5 w-full"
+          }`}
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <line x1="12" y1="5" x2="12" y2="19" />
@@ -888,108 +1321,129 @@ function PlanArtifact({
 }
 
 // ---------------------------------------------------------------------------
-// Video + Progress components (unchanged from original)
+// Video artifact
 // ---------------------------------------------------------------------------
-
-function ProgressBar({ progress }: { progress: number }) {
-  return (
-    <div className="w-full bg-white/10 rounded-full h-1.5 overflow-hidden">
-      <div
-        className="h-full bg-indigo-400 rounded-full transition-all duration-300"
-        style={{ width: `${Math.round(progress * 100)}%` }}
-      />
-    </div>
-  );
-}
 
 function VideoCard({
   renderState,
   videoProps,
+  onTweak,
 }: {
   renderState: RenderState;
   videoProps?: DynamicProps;
+  onTweak?: (prompt: string) => void;
 }) {
   if (renderState.status === "idle") return null;
 
   const parsedProps = videoProps ?? DynamicVideoProps.parse({});
-  const durationInFrames = Math.round(
-    getDynamicDurationInSeconds(parsedProps) * DYNAMIC_VIDEO_FPS,
-  );
+  const durationInSeconds = getDynamicDurationInSeconds(parsedProps);
+  const durationInFrames = Math.round(durationInSeconds * DYNAMIC_VIDEO_FPS);
+
+  const rendering = renderState.status === "rendering";
+  const done = renderState.status === "done";
 
   return (
-    <div className="mt-3 rounded-xl overflow-hidden border border-white/10 bg-white/5">
-      {renderState.status === "rendering" && (
-        <div className="p-4">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-2 h-2 bg-indigo-400 rounded-full animate-pulse" />
-            <span className="text-sm text-white/70">{renderState.phase}</span>
-            <span className="text-xs text-white/40 ml-auto">
+    <div className="mt-3 rounded-xl overflow-hidden border border-white/10 bg-white/5 shadow-2xl shadow-black/20">
+      {/* Hero player */}
+      <div className="relative w-full aspect-video bg-black">
+        <Player
+          component={DynamicComp}
+          inputProps={parsedProps}
+          durationInFrames={durationInFrames}
+          fps={DYNAMIC_VIDEO_FPS}
+          compositionHeight={DYNAMIC_VIDEO_HEIGHT}
+          compositionWidth={DYNAMIC_VIDEO_WIDTH}
+          style={{ width: "100%", height: "100%" }}
+          controls
+          autoPlay
+          loop
+        />
+
+        {/* Phase pill overlay while rendering */}
+        {rendering && (
+          <div className="absolute top-3 left-3 flex items-center gap-2 rounded-full bg-black/70 backdrop-blur-md border border-white/10 pl-2 pr-3 py-1 pointer-events-none">
+            <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-pulse" />
+            <span className="text-[11px] text-white/85 font-medium">{renderState.phase}</span>
+            <span className="text-[10px] text-white/50 tabular-nums">
               {Math.round(renderState.progress * 100)}%
             </span>
           </div>
-          <ProgressBar progress={renderState.progress} />
-          <div className="mt-3 rounded-lg overflow-hidden">
-            <div className="px-3 py-2 text-xs text-white/60 bg-black/20 border-b border-white/10">
-              Mode: <span className="text-white/85">{parsedProps.mode}</span> &bull; Scenes:{" "}
-              <span className="text-white/85">{parsedProps.scenes.length}</span>
-            </div>
-            <Player
-              component={DynamicComp}
-              inputProps={parsedProps}
-              durationInFrames={durationInFrames}
-              fps={DYNAMIC_VIDEO_FPS}
-              compositionHeight={DYNAMIC_VIDEO_HEIGHT}
-              compositionWidth={DYNAMIC_VIDEO_WIDTH}
-              style={{ width: "100%" }}
-              controls
-              autoPlay
-              loop
-            />
+        )}
+
+        {/* Done badge overlay */}
+        {done && (
+          <div className="absolute top-3 left-3 flex items-center gap-1.5 rounded-full bg-black/70 backdrop-blur-md border border-white/10 px-2.5 py-1 pointer-events-none">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="text-emerald-400">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+            <span className="text-[11px] text-white/85 font-medium">Ready</span>
           </div>
+        )}
+      </div>
+
+      {/* Progress bar flush under player while rendering */}
+      {rendering && (
+        <div className="h-1 bg-black/40">
+          <div
+            className="h-full bg-indigo-400 transition-all duration-300"
+            style={{ width: `${Math.round(renderState.progress * 100)}%` }}
+          />
         </div>
       )}
 
-      {renderState.status === "done" && (
-        <div className="p-4">
-          <div className="rounded-lg overflow-hidden mb-3">
-            <div className="px-3 py-2 text-xs text-white/60 bg-black/20 border-b border-white/10">
-              Mode: <span className="text-white/85">{parsedProps.mode}</span> &bull; Scenes:{" "}
-              <span className="text-white/85">{parsedProps.scenes.length}</span>
-            </div>
-            <Player
-              component={DynamicComp}
-              inputProps={parsedProps}
-              durationInFrames={durationInFrames}
-              fps={DYNAMIC_VIDEO_FPS}
-              compositionHeight={DYNAMIC_VIDEO_HEIGHT}
-              compositionWidth={DYNAMIC_VIDEO_WIDTH}
-              style={{ width: "100%" }}
-              controls
-              autoPlay
-              loop
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 bg-green-400 rounded-full" />
-              <span className="text-sm text-white/70">
-                Rendered &bull; {formatBytes(renderState.size)}
-              </span>
-            </div>
+      {/* Metadata + actions */}
+      <div className="p-3.5 flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-white/45">
+          <span className="rounded-full border border-white/10 px-2 py-0.5">
+            {MODE_LABELS[parsedProps.mode] ?? parsedProps.mode}
+          </span>
+          <span className="rounded-full border border-white/10 px-2 py-0.5">
+            {STYLE_LABELS[parsedProps.style] ?? parsedProps.style}
+          </span>
+          <span className="rounded-full border border-white/10 px-2 py-0.5">
+            {parsedProps.scenes.length} scene{parsedProps.scenes.length === 1 ? "" : "s"}
+          </span>
+          <span className="rounded-full border border-white/10 px-2 py-0.5 tabular-nums">
+            {formatDuration(durationInSeconds)}
+          </span>
+          {done && (
+            <span className="rounded-full border border-emerald-400/20 bg-emerald-400/5 text-emerald-300/70 px-2 py-0.5 tabular-nums">
+              {formatBytes(renderState.size)}
+            </span>
+          )}
+        </div>
+
+        {done && (
+          <div className="flex items-center gap-1.5 ml-auto">
+            {onTweak && (
+              <button
+                onClick={() =>
+                  onTweak(
+                    `Tweak this video: refine the pacing, polish the imagery, and keep the current story structure.`,
+                  )
+                }
+                className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-white/10 hover:border-white/25 text-white/65 hover:text-white/90 transition-colors"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" className="text-indigo-400/80">
+                  <path d="M12 2L13.09 8.26L18 6L14.74 10.91L21 12L14.74 13.09L18 18L13.09 15.74L12 22L10.91 15.74L6 18L9.26 13.09L3 12L9.26 10.91L6 6L10.91 8.26L12 2Z" />
+                </svg>
+                Tweak
+              </button>
+            )}
             <a
               href={renderState.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1"
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-colors font-medium"
             >
-              Download MP4
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
               </svg>
+              Download MP4
             </a>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -1045,6 +1499,11 @@ function ApprovedPlanReadonly({ plan }: { plan: VideoPlanType }) {
     return map;
   }, [plan.assets]);
 
+  const [expanded, setExpanded] = useState(false);
+  const COLLAPSED_COUNT = 3;
+  const hiddenCount = Math.max(0, plan.scenes.length - COLLAPSED_COUNT);
+  const visibleScenes = expanded ? plan.scenes : plan.scenes.slice(0, COLLAPSED_COUNT);
+
   return (
     <div className="mt-2 w-full rounded-xl border border-indigo-500/25 bg-indigo-950/30 overflow-hidden">
       <div className="px-4 py-3 border-b border-white/8 bg-white/3">
@@ -1058,7 +1517,7 @@ function ApprovedPlanReadonly({ plan }: { plan: VideoPlanType }) {
               {plan.status}
             </span>
           </div>
-          <span className="text-[10px] text-white/35 shrink-0">
+          <span className="text-[10px] text-white/35 shrink-0 tabular-nums">
             {formatDuration(plan.estimatedDuration)}
           </span>
         </div>
@@ -1095,35 +1554,57 @@ function ApprovedPlanReadonly({ plan }: { plan: VideoPlanType }) {
         <PlanTimeline scenes={plan.scenes} accentColor={plan.colorPalette.accent} />
       </div>
 
-      <div className="px-4 pb-3 space-y-2 max-h-[min(420px,50vh)] overflow-y-auto">
-        {plan.scenes.map((scene, i) => (
+      <div className="px-4 pb-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+        {visibleScenes.map((scene, i) => (
           <div
             key={scene.id}
-            className="rounded-lg border border-white/8 bg-white/3 p-3"
+            className="rounded-lg border border-white/8 bg-white/3 overflow-hidden"
           >
-            <div className="flex items-start justify-between gap-2 mb-1">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="text-[10px] font-bold text-white/25">{String(i + 1).padStart(2, "0")}</span>
+            <div className="flex items-center justify-between gap-2 px-2.5 pt-2 pb-1.5">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="text-[10px] font-bold text-white/25 tabular-nums">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
                 <h4 className="text-xs font-medium text-white/85 truncate">{scene.title}</h4>
               </div>
-              <span className="text-[10px] text-white/35 shrink-0">
-                {scene.durationInSeconds}s · {scene.layout}
+              <span className="text-[10px] text-white/35 shrink-0 tabular-nums">
+                {scene.durationInSeconds}s
               </span>
             </div>
-            {scene.body ? (
-              <p className="text-[11px] text-white/55 leading-relaxed">{scene.body}</p>
-            ) : null}
-            {scene.bullets?.length ? (
-              <ul className="mt-1.5 list-disc list-inside text-[10px] text-white/40 space-y-0.5">
-                {scene.bullets.map((b, j) => (
-                  <li key={`${scene.id}-b${j}`}>{b}</li>
-                ))}
-              </ul>
-            ) : null}
-            <SceneAssetPreview scene={scene} asset={assetMap.get(scene.id)} />
+            <div className="px-2.5 pb-2.5">
+              <ScenePreviewMockup
+                scene={scene}
+                palette={plan.colorPalette}
+                asset={assetMap.get(scene.id)}
+                style={plan.style}
+                compact
+              />
+            </div>
           </div>
         ))}
       </div>
+
+      {hiddenCount > 0 && (
+        <div className="px-4 pb-3">
+          <button
+            onClick={() => setExpanded((s) => !s)}
+            className="w-full text-[11px] text-white/40 hover:text-white/65 transition-colors flex items-center justify-center gap-1 py-1.5 rounded-lg border border-white/8 hover:border-white/15"
+          >
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              className={`transition-transform ${expanded ? "rotate-180" : ""}`}
+            >
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+            {expanded ? "Show less" : `Show all ${plan.scenes.length} scenes`}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1149,7 +1630,11 @@ function MessageBubble({
 }) {
   const isUser = message.role === "user";
   const planApproved = isUser ? tryParsePlanApprovedMessage(message.content) : null;
-  const wideColumn = Boolean(message.plan || planApproved);
+  const wideColumn = Boolean(
+    message.plan ||
+      planApproved ||
+      (message.renderState && message.renderState.status !== "idle"),
+  );
 
   const showSuggestions =
     isLatest &&
@@ -1226,10 +1711,11 @@ function MessageBubble({
         )}
 
         {message.renderState && message.renderState.status !== "idle" && (
-          <div className="w-full max-w-lg mt-1">
+          <div className="w-full mt-1">
             <VideoCard
               renderState={message.renderState}
               videoProps={message.videoProps}
+              onTweak={onSendSuggestion}
             />
           </div>
         )}
