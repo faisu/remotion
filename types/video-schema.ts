@@ -4,6 +4,60 @@ const DynamicMode = z.enum(["short", "detailed", "narrated"]);
 const SceneLayout = z.enum(["text", "image-left", "image-right", "image-background"]);
 const VisualStyle = z.enum(["minimal", "bold", "cinematic"]);
 
+export const TransitionType = z.enum([
+  "none",
+  "fade",
+  "slide-left",
+  "slide-right",
+  "slide-up",
+  "slide-down",
+  "wipe-left",
+  "wipe-right",
+  "iris",
+]);
+export type TransitionTypeKind = z.infer<typeof TransitionType>;
+
+export const Emphasis = z.enum(["hook", "point", "conclusion", "transition"]);
+export type EmphasisKind = z.infer<typeof Emphasis>;
+
+export const AspectRatio = z.enum(["16:9", "9:16", "1:1"]);
+export type AspectRatioKind = z.infer<typeof AspectRatio>;
+
+export const FontFamily = z.enum([
+  "Inter",
+  "Instrument Serif",
+  "Space Grotesk",
+  "Geist Mono",
+  "Playfair Display",
+  "DM Sans",
+]);
+export type FontFamilyKind = z.infer<typeof FontFamily>;
+
+export const CaptionStyle = z.enum(["none", "tiktok", "subtitle"]);
+export type CaptionStyleKind = z.infer<typeof CaptionStyle>;
+
+export const MusicIntensity = z.enum(["low", "medium", "high"]);
+export const MusicGenre = z.enum([
+  "none",
+  "cinematic",
+  "upbeat",
+  "ambient",
+  "corporate",
+  "tech",
+]);
+
+/**
+ * A single word of an ElevenLabs transcript, used to render word-level
+ * animated captions. startMs / endMs are absolute times within the scene's
+ * own voiceover audio (0 = start of the scene's narration).
+ */
+const CaptionWord = z.object({
+  text: z.string(),
+  startMs: z.number(),
+  endMs: z.number(),
+});
+export type CaptionWordType = z.infer<typeof CaptionWord>;
+
 export const MAX_DYNAMIC_SCENES = 12;
 
 const DynamicScene = z.object({
@@ -14,6 +68,17 @@ const DynamicScene = z.object({
   imageUrl: z.string().optional(),
   durationInSeconds: z.number().min(1).max(20).optional(),
   layout: SceneLayout.optional().default("text"),
+  // --- new fields (all optional for backward compatibility) ---
+  voiceoverText: z.string().optional(),
+  voiceoverUrl: z.string().optional(),
+  voiceoverDurationMs: z.number().optional(),
+  captions: z.array(CaptionWord).optional().default([]),
+  transitionIn: TransitionType.optional().default("fade"),
+  emphasis: Emphasis.optional(),
+  kenBurns: z
+    .enum(["zoom-in", "zoom-out", "pan-left", "pan-right", "none"])
+    .optional()
+    .default("zoom-in"),
 });
 
 const defaultSceneDuration = (mode: z.infer<typeof DynamicMode>) => {
@@ -38,28 +103,45 @@ const DynamicVideoInput = z.object({
   scenes: z.array(DynamicScene).max(MAX_DYNAMIC_SCENES).optional().default([]),
   style: VisualStyle.optional().default("minimal"),
   durationInSeconds: z.number().min(2).max(120).optional(),
+  // --- new global fields (optional) ---
+  fontFamily: FontFamily.optional().default("Inter"),
+  aspectRatio: AspectRatio.optional().default("16:9"),
+  captionStyle: CaptionStyle.optional().default("tiktok"),
+  narration: z
+    .object({
+      enabled: z.boolean().optional().default(true),
+      voiceId: z.string().optional(),
+    })
+    .optional(),
+  music: z
+    .object({
+      genre: MusicGenre.optional().default("none"),
+      intensity: MusicIntensity.optional().default("low"),
+      url: z.string().optional(),
+      volume: z.number().min(0).max(1).optional().default(0.15),
+    })
+    .optional(),
 });
+
+type ParsedDynamicScene = z.infer<typeof DynamicScene>;
 
 export const DynamicVideoProps = DynamicVideoInput.transform((input) => {
   const mode = input.mode ?? "short";
   const fallbackSceneDuration = defaultSceneDuration(mode);
-  const normalizedScenes = (
-    input.scenes.length > 0
-      ? input.scenes
-      : [
-          {
-            title: input.title || input.topic || "Dynamic Video",
-            body: input.subtitle || "",
-            bullets: input.items,
-            imagePrompt: input.topic
-              ? `Create a cinematic illustration for: ${input.topic}`
-              : input.title
-                ? `Create an illustration for: ${input.title}`
-                : undefined,
-            layout: "text" as const,
-          },
-        ]
-  )
+  const fallbackScene: ParsedDynamicScene = DynamicScene.parse({
+    title: input.title || input.topic || "Dynamic Video",
+    body: input.subtitle || "",
+    bullets: input.items,
+    imagePrompt: input.topic
+      ? `Create a cinematic illustration for: ${input.topic}`
+      : input.title
+        ? `Create an illustration for: ${input.title}`
+        : undefined,
+    layout: "text" as const,
+  });
+  const scenesSource: ParsedDynamicScene[] =
+    input.scenes.length > 0 ? input.scenes : [fallbackScene];
+  const normalizedScenes = scenesSource
     .slice(0, MAX_DYNAMIC_SCENES)
     .map((scene, index) => {
       return {
@@ -73,6 +155,9 @@ export const DynamicVideoProps = DynamicVideoInput.transform((input) => {
           1,
           20
         ),
+        captions: scene.captions ?? [],
+        transitionIn: scene.transitionIn ?? "fade",
+        kenBurns: scene.kenBurns ?? "zoom-in",
       };
     });
 
@@ -98,6 +183,11 @@ export const DynamicVideoProps = DynamicVideoInput.transform((input) => {
     scenes: normalizedScenes,
     style: input.style ?? "minimal",
     durationInSeconds: normalizedDuration,
+    fontFamily: input.fontFamily ?? "Inter",
+    aspectRatio: input.aspectRatio ?? "16:9",
+    captionStyle: input.captionStyle ?? "tiktok",
+    narration: input.narration ?? { enabled: true, voiceId: undefined },
+    music: input.music ?? { genre: "none", intensity: "low", volume: 0.15 },
   };
 });
 
@@ -116,13 +206,25 @@ export const DYNAMIC_VIDEO_FPS = 30;
 export const DYNAMIC_VIDEO_WIDTH = 1280;
 export const DYNAMIC_VIDEO_HEIGHT = 720;
 
+/**
+ * Resolve the pixel dimensions for a given aspect ratio. Keeps the longer
+ * edge at 1280 so renders stay fast and consistent.
+ */
+export const resolveAspectRatio = (
+  aspect: AspectRatioKind
+): { width: number; height: number } => {
+  if (aspect === "9:16") return { width: 720, height: 1280 };
+  if (aspect === "1:1") return { width: 1080, height: 1080 };
+  return { width: DYNAMIC_VIDEO_WIDTH, height: DYNAMIC_VIDEO_HEIGHT };
+};
+
 // ---------------------------------------------------------------------------
 // Plan Mode schemas
 // ---------------------------------------------------------------------------
 
 const PlanStatus = z.enum(["draft", "approved", "rendering", "done"]);
 const AssetStatus = z.enum(["pending", "found", "approved", "failed"]);
-const AssetType = z.enum(["image", "reference", "inspiration"]);
+const AssetType = z.enum(["image", "reference", "inspiration", "voiceover", "music"]);
 
 export const PlanScene = z.object({
   id: z.string(),
@@ -134,6 +236,16 @@ export const PlanScene = z.object({
   previewImageUrl: z.string().optional(),
   durationInSeconds: z.number().min(1).max(20).default(3),
   notes: z.string().optional(),
+  // --- new scene fields ---
+  voiceoverText: z.string().optional(),
+  voiceoverUrl: z.string().optional(),
+  voiceoverDurationMs: z.number().optional(),
+  captions: z.array(CaptionWord).optional(),
+  transitionIn: TransitionType.optional(),
+  emphasis: Emphasis.optional(),
+  kenBurns: z
+    .enum(["zoom-in", "zoom-out", "pan-left", "pan-right", "none"])
+    .optional(),
 });
 
 export type PlanSceneType = z.infer<typeof PlanScene>;
@@ -166,6 +278,24 @@ export const VideoPlan = z.object({
   estimatedDuration: z.number().default(0),
   scenes: z.array(PlanScene).max(MAX_DYNAMIC_SCENES).default([]),
   assets: z.array(PlanAsset).default([]),
+  // --- new global plan fields ---
+  fontFamily: FontFamily.optional(),
+  aspectRatio: AspectRatio.optional(),
+  captionStyle: CaptionStyle.optional(),
+  narration: z
+    .object({
+      enabled: z.boolean().optional(),
+      voiceId: z.string().optional(),
+    })
+    .optional(),
+  music: z
+    .object({
+      genre: MusicGenre.optional(),
+      intensity: MusicIntensity.optional(),
+      url: z.string().optional(),
+      volume: z.number().optional(),
+    })
+    .optional(),
 });
 
 export type VideoPlanType = z.infer<typeof VideoPlan>;
@@ -182,6 +312,11 @@ export function videoPlanToDynamicProps(plan: VideoPlanType): z.input<typeof Dyn
     items: [],
     style: plan.style,
     durationInSeconds: plan.estimatedDuration || undefined,
+    fontFamily: plan.fontFamily,
+    aspectRatio: plan.aspectRatio,
+    captionStyle: plan.captionStyle,
+    narration: plan.narration,
+    music: plan.music,
     scenes: plan.scenes.map((s) => ({
       title: s.title,
       body: s.body,
@@ -190,6 +325,13 @@ export function videoPlanToDynamicProps(plan: VideoPlanType): z.input<typeof Dyn
       imagePrompt: s.imagePrompt || undefined,
       imageUrl: s.previewImageUrl || undefined,
       durationInSeconds: s.durationInSeconds,
+      voiceoverText: s.voiceoverText,
+      voiceoverUrl: s.voiceoverUrl,
+      voiceoverDurationMs: s.voiceoverDurationMs,
+      captions: s.captions,
+      transitionIn: s.transitionIn,
+      emphasis: s.emphasis,
+      kenBurns: s.kenBurns,
     })),
   };
 }

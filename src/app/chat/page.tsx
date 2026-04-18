@@ -123,18 +123,6 @@ function tryParsePlanApprovedMessage(content: string):
   }
 }
 
-function appendDeltaWithSpacing(existing: string, incoming: string): string {
-  if (!existing || !incoming) return existing + incoming;
-  const lastChar = existing[existing.length - 1];
-  const firstChar = incoming[0];
-  const needsSpace =
-    !/\s/.test(lastChar) &&
-    !/\s/.test(firstChar) &&
-    /[A-Za-z0-9.!?)]/.test(lastChar) &&
-    /[A-Za-z0-9(]/.test(firstChar);
-  return needsSpace ? `${existing} ${incoming}` : existing + incoming;
-}
-
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -1643,6 +1631,11 @@ function MessageBubble({
     message.renderState?.status === "done" &&
     message.videoProps;
 
+  // The assistant message is actively being streamed when it's the latest
+  // message, the request is still in flight, and at least one token has
+  // arrived. We use this to drive the blinking caret + subtle bubble pulse.
+  const isStreaming = !isUser && isLatest && isLoading && !!message.content;
+
   return (
     <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}>
       <div
@@ -1661,7 +1654,9 @@ function MessageBubble({
               isUser
                 ? "bg-indigo-600 text-white rounded-tr-sm"
                 : "bg-white/10 text-white/90 rounded-tl-sm"
-            } ${planApproved ? "w-full" : ""}`}
+            } ${planApproved ? "w-full" : ""} ${
+              isStreaming ? "streaming-bubble" : ""
+            }`}
           >
             {planApproved ? (
               <div>
@@ -1672,14 +1667,18 @@ function MessageBubble({
               isUser ? (
                 <div className="whitespace-pre-wrap wrap-break-word">{message.content}</div>
               ) : (
-                <div className="wrap-break-word">
+                <div
+                  className={`wrap-break-word ${
+                    isStreaming ? "streaming-caret" : ""
+                  }`}
+                >
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                     {message.content}
                   </ReactMarkdown>
                 </div>
               )
             ) : (
-              <span className="flex gap-1 py-0.5">
+              <span className="flex gap-1 py-0.5" aria-label="Assistant is thinking">
                 <span className="w-1.5 h-1.5 bg-white/50 rounded-full animate-bounce [animation-delay:0ms]" />
                 <span className="w-1.5 h-1.5 bg-white/50 rounded-full animate-bounce [animation-delay:150ms]" />
                 <span className="w-1.5 h-1.5 bg-white/50 rounded-full animate-bounce [animation-delay:300ms]" />
@@ -1755,6 +1754,7 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const activeRequestRef = useRef<AbortController | null>(null);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1789,6 +1789,8 @@ export default function ChatPage() {
       setMessages((prev) => [...prev, userMessage, assistantMessage]);
       setInput("");
       setIsLoading(true);
+      const controller = new AbortController();
+      activeRequestRef.current = controller;
 
       const history = messages
         .filter((m) => m.id !== "welcome")
@@ -1800,6 +1802,7 @@ export default function ChatPage() {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ messages: history }),
+          signal: controller.signal,
         });
 
         if (!response.ok || !response.body) {
@@ -1831,9 +1834,12 @@ export default function ChatPage() {
 
             switch (event.type) {
               case "text_delta":
+                // Deltas from client.messages.stream() arrive on token
+                // boundaries with their own whitespace — concatenate
+                // verbatim to avoid splitting words like "he" + "llo".
                 updateAssistant((m) => ({
                   ...m,
-                  content: appendDeltaWithSpacing(m.content, event.text),
+                  content: m.content + event.text,
                 }));
                 scrollToBottom();
                 break;
@@ -1923,6 +1929,9 @@ export default function ChatPage() {
           }
         }
       } catch (err) {
+        if ((err as Error).name === "AbortError") {
+          return;
+        }
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId
@@ -1931,6 +1940,9 @@ export default function ChatPage() {
           ),
         );
       } finally {
+        if (activeRequestRef.current === controller) {
+          activeRequestRef.current = null;
+        }
         setIsLoading(false);
         inputRef.current?.focus();
       }
@@ -1951,6 +1963,13 @@ export default function ChatPage() {
   const sendMessage = useCallback(() => {
     sendWithText(input.trim());
   }, [input, sendWithText]);
+
+  const stopGeneration = useCallback(() => {
+    activeRequestRef.current?.abort();
+    activeRequestRef.current = null;
+    setIsLoading(false);
+    inputRef.current?.focus();
+  }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -2073,21 +2092,22 @@ export default function ChatPage() {
             style={{ minHeight: "24px" }}
           />
           <button
-            onClick={sendMessage}
-            disabled={!input.trim() || isLoading}
+            onClick={isLoading ? stopGeneration : sendMessage}
+            disabled={isLoading ? false : !input.trim()}
             className="w-8 h-8 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:cursor-not-allowed transition-all flex items-center justify-center shrink-0"
+            title={isLoading ? "Stop response" : "Send message"}
+            aria-label={isLoading ? "Stop response" : "Send message"}
           >
             {isLoading ? (
               <svg
-                className="animate-spin"
                 width="14"
                 height="14"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="white"
-                strokeWidth="2"
+                strokeWidth="2.5"
               >
-                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                <rect x="7" y="7" width="10" height="10" rx="1.5" />
               </svg>
             ) : (
               <svg

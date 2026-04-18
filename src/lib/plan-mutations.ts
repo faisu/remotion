@@ -8,7 +8,18 @@ export type PlanAction =
   | {
       action: "update_globals";
       data: Partial<
-        Pick<VideoPlanType, "style" | "mode" | "title" | "colorPalette">
+        Pick<
+          VideoPlanType,
+          | "style"
+          | "mode"
+          | "title"
+          | "colorPalette"
+          | "fontFamily"
+          | "aspectRatio"
+          | "captionStyle"
+          | "narration"
+          | "music"
+        >
       >;
     }
   | { action: "refresh_asset"; sceneId: string };
@@ -67,24 +78,37 @@ export async function applyPlanMutation(
         layout: mutation.data.layout || "text",
         imagePrompt: mutation.data.imagePrompt || "",
         durationInSeconds: mutation.data.durationInSeconds || defaultDuration,
+        notes: mutation.data.notes,
+        voiceoverText: mutation.data.voiceoverText,
+        transitionIn: mutation.data.transitionIn ?? "fade",
+        emphasis: mutation.data.emphasis,
+        kenBurns: mutation.data.kenBurns ?? "zoom-in",
       };
 
       const scenes = [...plan.scenes, newScene];
-      const assets = newScene.imagePrompt
-        ? [
-            ...plan.assets,
-            {
-              id: `asset-${newId}`,
-              type: "image" as const,
-              prompt: newScene.imagePrompt,
-              source: "pending",
-              sceneId: newId,
-              status: "pending" as const,
-            },
-          ]
-        : plan.assets;
+      const nextAssets = [...plan.assets];
+      if (newScene.imagePrompt) {
+        nextAssets.push({
+          id: `asset-${newId}`,
+          type: "image" as const,
+          prompt: newScene.imagePrompt,
+          source: "pending",
+          sceneId: newId,
+          status: "pending" as const,
+        });
+      }
+      if (newScene.voiceoverText) {
+        nextAssets.push({
+          id: `voice-${newId}`,
+          type: "voiceover" as const,
+          prompt: newScene.voiceoverText,
+          source: "pending",
+          sceneId: newId,
+          status: "pending" as const,
+        });
+      }
 
-      return recalcDuration({ ...plan, scenes, assets });
+      return recalcDuration({ ...plan, scenes, assets: nextAssets });
     }
 
     case "update_globals": {
@@ -96,6 +120,27 @@ export async function applyPlanMutation(
         updatedPlan.colorPalette = {
           ...updatedPlan.colorPalette,
           ...mutation.data.colorPalette,
+        };
+      }
+      if (mutation.data.fontFamily) {
+        updatedPlan.fontFamily = mutation.data.fontFamily;
+      }
+      if (mutation.data.aspectRatio) {
+        updatedPlan.aspectRatio = mutation.data.aspectRatio;
+      }
+      if (mutation.data.captionStyle) {
+        updatedPlan.captionStyle = mutation.data.captionStyle;
+      }
+      if (mutation.data.narration) {
+        updatedPlan.narration = {
+          ...updatedPlan.narration,
+          ...mutation.data.narration,
+        };
+      }
+      if (mutation.data.music) {
+        updatedPlan.music = {
+          ...updatedPlan.music,
+          ...mutation.data.music,
         };
       }
       return recalcDuration(updatedPlan);

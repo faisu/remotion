@@ -1,5 +1,6 @@
 import {
   AbsoluteFill,
+  Audio,
   Easing,
   Img,
   Sequence,
@@ -8,13 +9,32 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
+import {
+  TransitionSeries,
+  linearTiming,
+  springTiming,
+  type TransitionPresentation,
+} from "@remotion/transitions";
+import { fade } from "@remotion/transitions/fade";
+import { slide } from "@remotion/transitions/slide";
+import { wipe } from "@remotion/transitions/wipe";
+import { iris } from "@remotion/transitions/iris";
+import { none } from "@remotion/transitions/none";
+import {
+  createTikTokStyleCaptions,
+  type Caption,
+  type TikTokPage,
+} from "@remotion/captions";
 import { z } from "zod";
 import {
   DynamicVideoProps,
   type DynamicVideoPropsType,
 } from "../../../types/video-schema";
+import { resolveFontFamily } from "../fonts";
 
 type Props = z.infer<typeof DynamicVideoProps>;
+
+type SceneType = DynamicVideoPropsType["scenes"][number];
 
 const hexToRgb = (hex: string): { r: number; g: number; b: number; valid: boolean } => {
   const clean = hex.replace("#", "");
@@ -28,80 +48,158 @@ const hexToRgb = (hex: string): { r: number; g: number; b: number; valid: boolea
   return { r: valid ? r : 15, g: valid ? g : 23, b: valid ? b : 42, valid };
 };
 
-const AnimatedBullet: React.FC<{
-  text: string;
-  delay: number;
+// ---------------------------------------------------------------------------
+// Ken Burns — cheap but effective "camera move" on still images.
+// ---------------------------------------------------------------------------
+
+type KenBurnsKind = NonNullable<SceneType["kenBurns"]>;
+
+function useKenBurnsStyle(
+  kind: KenBurnsKind,
+  durationInFrames: number
+): React.CSSProperties {
+  const frame = useCurrentFrame();
+  const t = Math.max(0, Math.min(1, frame / Math.max(1, durationInFrames)));
+
+  if (kind === "none") {
+    return { transform: "none" };
+  }
+
+  // All moves are intentionally subtle — roughly 6-10% scale + small pan.
+  switch (kind) {
+    case "zoom-in": {
+      const scale = 1 + t * 0.08;
+      return { transform: `scale(${scale})` };
+    }
+    case "zoom-out": {
+      const scale = 1.1 - t * 0.08;
+      return { transform: `scale(${scale})` };
+    }
+    case "pan-left": {
+      const x = interpolate(t, [0, 1], [4, -4]);
+      return { transform: `scale(1.08) translateX(${x}%)` };
+    }
+    case "pan-right": {
+      const x = interpolate(t, [0, 1], [-4, 4]);
+      return { transform: `scale(1.08) translateX(${x}%)` };
+    }
+    default:
+      return { transform: "scale(1.04)" };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// TikTok-style captions — synced to the scene's voiceover.
+// Scene-local time (0 = scene start) is computed from useCurrentFrame()
+// because each scene is rendered inside its own <Sequence>.
+// ---------------------------------------------------------------------------
+
+const TikTokCaptionsLayer: React.FC<{
+  captions: Array<{ text: string; startMs: number; endMs: number }>;
   accentColor: string;
   textColor: string;
-  compact: boolean;
-}> = ({ text, delay, accentColor, textColor, compact }) => {
+  fontFamily: string;
+}> = ({ captions, accentColor, textColor, fontFamily }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
+  const currentMs = (frame / fps) * 1000;
 
-  const progress = spring({
-    fps,
-    frame,
-    config: { damping: 60, stiffness: 200 },
-    delay,
-    durationInFrames: 20,
+  const remotionCaptions: Caption[] = captions.map((c) => ({
+    text: c.text,
+    startMs: c.startMs,
+    endMs: c.endMs,
+    timestampMs: null,
+    confidence: null,
+  }));
+
+  const { pages } = createTikTokStyleCaptions({
+    captions: remotionCaptions,
+    combineTokensWithinMilliseconds: 1200,
   });
 
-  const opacity = interpolate(progress, [0, 1], [0, 1]);
-  const translateX = interpolate(progress, [0, 1], [-30, 0]);
+  const activePage: TikTokPage | undefined = pages.find(
+    (p) => currentMs >= p.startMs && currentMs <= p.startMs + p.durationMs
+  );
+
+  if (!activePage) return null;
 
   return (
     <div
       style={{
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: "12%",
         display: "flex",
-        alignItems: "center",
-        gap: compact ? 10 : 12,
-        opacity,
-        transform: `translateX(${translateX}px)`,
-        marginBottom: compact ? 8 : 12,
+        justifyContent: "center",
+        padding: "0 8%",
+        pointerEvents: "none",
       }}
     >
       <div
         style={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          backgroundColor: accentColor,
-          flexShrink: 0,
-        }}
-      />
-      <span
-        style={{
-          fontSize: compact ? 20 : 24,
+          display: "flex",
+          flexWrap: "wrap",
+          justifyContent: "center",
+          gap: "0 14px",
+          fontFamily,
+          fontWeight: 800,
+          fontSize: 52,
+          letterSpacing: "-0.01em",
+          lineHeight: 1.15,
           color: textColor,
-          opacity: 0.85,
-          fontFamily: "system-ui, -apple-system, sans-serif",
-          fontWeight: 400,
+          textShadow:
+            "0 4px 18px rgba(0,0,0,0.55), 0 0 2px rgba(0,0,0,0.8)",
+          textAlign: "center",
         }}
       >
-        {text}
-      </span>
+        {activePage.tokens.map((tok, i) => {
+          const isActive = currentMs >= tok.fromMs && currentMs <= tok.toMs;
+          return (
+            <span
+              key={`${tok.text}-${i}-${tok.fromMs}`}
+              style={{
+                color: isActive ? accentColor : textColor,
+                transform: isActive ? "translateY(-2px) scale(1.04)" : "none",
+                transition: "transform 80ms ease-out",
+              }}
+            >
+              {tok.text}
+            </span>
+          );
+        })}
+      </div>
     </div>
   );
 };
 
+// ---------------------------------------------------------------------------
+// Scene card
+// ---------------------------------------------------------------------------
+
 const SceneCard: React.FC<{
-  scene: DynamicVideoPropsType["scenes"][number];
+  scene: SceneType;
   style: DynamicVideoPropsType["style"];
   mode: DynamicVideoPropsType["mode"];
   accentColor: string;
   textColor: string;
   subtitle?: string;
-}> = ({ scene, style, mode, accentColor, textColor, subtitle }) => {
+  fontFamily: string;
+  captionStyle: DynamicVideoPropsType["captionStyle"];
+}> = ({
+  scene,
+  style,
+  mode,
+  accentColor,
+  textColor,
+  subtitle,
+  fontFamily,
+  captionStyle,
+}) => {
   const frame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
-  const introFrames = Math.max(10, Math.round(fps * 0.35));
-  const outroStart = Math.max(introFrames + 1, durationInFrames - Math.round(fps * 0.45));
-  const sceneOpacity = interpolate(
-    frame,
-    [0, introFrames, outroStart, durationInFrames],
-    [0, 1, 1, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
+  // No opacity fade-in/out here — <TransitionSeries> handles scene-to-scene
+  // blending. We only animate the interior elements now.
 
   const bgProgress = interpolate(frame, [0, fps], [0, 1], {
     extrapolateRight: "clamp",
@@ -112,7 +210,7 @@ const SceneCard: React.FC<{
     fps,
     frame,
     config: { damping: 80, stiffness: 120 },
-    delay: 8,
+    delay: 4,
     durationInFrames: 30,
   });
 
@@ -123,7 +221,7 @@ const SceneCard: React.FC<{
     fps,
     frame,
     config: { damping: 80, stiffness: 100 },
-    delay: 18,
+    delay: 12,
     durationInFrames: 25,
   });
   const bodyOpacity = interpolate(bodyProgress, [0, 1], [0, 1]);
@@ -133,27 +231,36 @@ const SceneCard: React.FC<{
   const usesImage = Boolean(scene.imageUrl);
   const imageOnLeft = scene.layout === "image-left";
   const imageAsBackground = scene.layout === "image-background";
+  const kenBurnsStyle = useKenBurnsStyle(scene.kenBurns ?? "zoom-in", durationInFrames);
+  const showCaptions =
+    captionStyle === "tiktok" &&
+    scene.captions &&
+    scene.captions.length > 0;
 
   return (
-    <AbsoluteFill
-      style={{
-        opacity: sceneOpacity,
-        overflow: "hidden",
-      }}
-    >
+    <AbsoluteFill style={{ overflow: "hidden" }}>
       {usesImage && imageAsBackground && (
         <>
-          <Img
-            src={scene.imageUrl ?? ""}
+          <div
             style={{
               position: "absolute",
               inset: 0,
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-              opacity: 0.35 + bgProgress * 0.15,
+              ...kenBurnsStyle,
+              willChange: "transform",
             }}
-          />
+          >
+            <Img
+              src={scene.imageUrl ?? ""}
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: "100%",
+                height: "100%",
+                objectFit: "cover",
+                opacity: 0.35 + bgProgress * 0.15,
+              }}
+            />
+          </div>
           <div
             style={{
               position: "absolute",
@@ -194,16 +301,26 @@ const SceneCard: React.FC<{
                 borderRadius: 24,
                 overflow: "hidden",
                 border: `1px solid ${accentColor}33`,
+                position: "relative",
               }}
             >
-              <Img
-                src={scene.imageUrl ?? ""}
+              <div
                 style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "cover",
+                  position: "absolute",
+                  inset: 0,
+                  ...kenBurnsStyle,
+                  willChange: "transform",
                 }}
-              />
+              >
+                <Img
+                  src={scene.imageUrl ?? ""}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                  }}
+                />
+              </div>
             </div>
           )}
 
@@ -221,7 +338,7 @@ const SceneCard: React.FC<{
                 color: textColor,
                 margin: 0,
                 lineHeight: 1.1,
-                fontFamily: "system-ui, -apple-system, sans-serif",
+                fontFamily,
                 letterSpacing: style === "cinematic" ? "0.02em" : "normal",
               }}
             >
@@ -237,7 +354,7 @@ const SceneCard: React.FC<{
                   lineHeight: mode === "narrated" ? 1.42 : 1.32,
                   fontSize: mode === "narrated" ? 30 : 26,
                   transform: `translateY(${bodyY}px)`,
-                  fontFamily: "system-ui, -apple-system, sans-serif",
+                  fontFamily,
                 }}
               >
                 {scene.body || subtitle}
@@ -250,10 +367,11 @@ const SceneCard: React.FC<{
                   <AnimatedBullet
                     key={i}
                     text={item}
-                    delay={28 + i * 8}
+                    delay={18 + i * 8}
                     accentColor={accentColor}
                     textColor={textColor}
                     compact={compact}
+                    fontFamily={fontFamily}
                   />
                 ))}
               </div>
@@ -261,9 +379,134 @@ const SceneCard: React.FC<{
           </div>
         </div>
       </AbsoluteFill>
+
+      {/* Per-scene voiceover */}
+      {scene.voiceoverUrl ? (
+        <Audio src={scene.voiceoverUrl} />
+      ) : null}
+
+      {/* TikTok-style word-synced captions, rendered on top of everything */}
+      {showCaptions && scene.captions ? (
+        <TikTokCaptionsLayer
+          captions={scene.captions}
+          accentColor={accentColor}
+          textColor={textColor}
+          fontFamily={fontFamily}
+        />
+      ) : null}
     </AbsoluteFill>
   );
 };
+
+const AnimatedBullet: React.FC<{
+  text: string;
+  delay: number;
+  accentColor: string;
+  textColor: string;
+  compact: boolean;
+  fontFamily: string;
+}> = ({ text, delay, accentColor, textColor, compact, fontFamily }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+
+  const progress = spring({
+    fps,
+    frame,
+    config: { damping: 60, stiffness: 200 },
+    delay,
+    durationInFrames: 20,
+  });
+
+  const opacity = interpolate(progress, [0, 1], [0, 1]);
+  const translateX = interpolate(progress, [0, 1], [-30, 0]);
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: compact ? 10 : 12,
+        opacity,
+        transform: `translateX(${translateX}px)`,
+        marginBottom: compact ? 8 : 12,
+      }}
+    >
+      <div
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          backgroundColor: accentColor,
+          flexShrink: 0,
+        }}
+      />
+      <span
+        style={{
+          fontSize: compact ? 20 : 24,
+          color: textColor,
+          opacity: 0.85,
+          fontFamily,
+          fontWeight: 400,
+        }}
+      >
+        {text}
+      </span>
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Transition plumbing
+// ---------------------------------------------------------------------------
+
+function presentationFor(
+  transition: NonNullable<SceneType["transitionIn"]>,
+  width: number,
+  height: number
+): TransitionPresentation<Record<string, unknown>> {
+  switch (transition) {
+    case "none":
+      return none() as TransitionPresentation<Record<string, unknown>>;
+    case "fade":
+      return fade() as TransitionPresentation<Record<string, unknown>>;
+    case "slide-left":
+      return slide({ direction: "from-right" }) as TransitionPresentation<
+        Record<string, unknown>
+      >;
+    case "slide-right":
+      return slide({ direction: "from-left" }) as TransitionPresentation<
+        Record<string, unknown>
+      >;
+    case "slide-up":
+      return slide({ direction: "from-bottom" }) as TransitionPresentation<
+        Record<string, unknown>
+      >;
+    case "slide-down":
+      return slide({ direction: "from-top" }) as TransitionPresentation<
+        Record<string, unknown>
+      >;
+    case "wipe-left":
+      return wipe({ direction: "from-right" }) as TransitionPresentation<
+        Record<string, unknown>
+      >;
+    case "wipe-right":
+      return wipe({ direction: "from-left" }) as TransitionPresentation<
+        Record<string, unknown>
+      >;
+    case "iris":
+      return iris({ width, height }) as unknown as TransitionPresentation<
+        Record<string, unknown>
+      >;
+    default:
+      return fade() as TransitionPresentation<Record<string, unknown>>;
+  }
+}
+
+const TRANSITION_FRAMES = 14;
+
+// ---------------------------------------------------------------------------
+// Root composition
+// ---------------------------------------------------------------------------
 
 export const DynamicComp: React.FC<Props> = ({
   title,
@@ -274,14 +517,18 @@ export const DynamicComp: React.FC<Props> = ({
   accentColor,
   textColor,
   style,
+  fontFamily,
+  captionStyle,
+  music,
 }) => {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
+  const { fps, width, height } = useVideoConfig();
   const bgRgb = hexToRgb(backgroundColor);
   const accentRgb = hexToRgb(accentColor);
   const introOpacity = interpolate(frame, [0, 10], [0, 1], {
     extrapolateRight: "clamp",
   });
+  const resolvedFont = resolveFontFamily(fontFamily);
 
   const backgroundStyle = (() => {
     if (style === "bold") {
@@ -300,14 +547,6 @@ export const DynamicComp: React.FC<Props> = ({
     }
     return { backgroundColor };
   })();
-
-  let currentFrom = 0;
-  const sceneTimings = scenes.map((scene) => {
-    const duration = Math.max(1, Math.round((scene.durationInSeconds ?? 3) * fps));
-    const from = currentFrom;
-    currentFrom += duration;
-    return { from, duration, scene };
-  });
 
   return (
     <AbsoluteFill style={{ ...backgroundStyle, overflow: "hidden" }}>
@@ -350,18 +589,62 @@ export const DynamicComp: React.FC<Props> = ({
         </>
       )}
 
-      {sceneTimings.map(({ from, duration, scene }, index) => (
-        <Sequence key={`${index}-${scene.title}`} from={from} durationInFrames={duration}>
-          <SceneCard
-            scene={scene}
-            style={style}
-            mode={mode}
-            accentColor={accentColor}
-            textColor={textColor}
-            subtitle={index === 0 ? subtitle : undefined}
-          />
-        </Sequence>
-      ))}
+      {/* Global music bed (quiet, behind narration). */}
+      {music?.url ? (
+        <Audio src={music.url} volume={music.volume ?? 0.15} loop />
+      ) : null}
+
+      {/* Scenes with real transitions instead of hard cuts. */}
+      <TransitionSeries>
+        {scenes.flatMap((scene, index) => {
+          const duration = Math.max(
+            1,
+            Math.round((scene.durationInSeconds ?? 3) * fps)
+          );
+          const transitionKind = scene.transitionIn ?? "fade";
+          const renderTransition = index > 0 && transitionKind !== "none";
+          const sceneKey = `${index}-${scene.title}`;
+
+          const children: React.ReactNode[] = [];
+
+          if (renderTransition) {
+            children.push(
+              <TransitionSeries.Transition
+                key={`transition-${sceneKey}`}
+                presentation={presentationFor(transitionKind, width, height)}
+                timing={
+                  transitionKind === "fade"
+                    ? linearTiming({ durationInFrames: TRANSITION_FRAMES })
+                    : springTiming({
+                        durationInFrames: TRANSITION_FRAMES,
+                        config: { damping: 200 },
+                      })
+                }
+              />
+            );
+          }
+
+          children.push(
+            <TransitionSeries.Sequence
+              key={`scene-${sceneKey}`}
+              durationInFrames={duration}
+            >
+              <SceneCard
+                scene={scene}
+                style={style}
+                mode={mode}
+                accentColor={accentColor}
+                textColor={textColor}
+                subtitle={index === 0 ? subtitle : undefined}
+                fontFamily={resolvedFont}
+                captionStyle={captionStyle}
+              />
+            </TransitionSeries.Sequence>
+          );
+
+          return children;
+        })}
+      </TransitionSeries>
 
       <div
         style={{
@@ -371,7 +654,7 @@ export const DynamicComp: React.FC<Props> = ({
           color: textColor,
           opacity: 0.45,
           fontSize: 18,
-          fontFamily: "system-ui, -apple-system, sans-serif",
+          fontFamily: resolvedFont,
         }}
       >
         {title}
@@ -379,3 +662,7 @@ export const DynamicComp: React.FC<Props> = ({
     </AbsoluteFill>
   );
 };
+
+// Keep a legacy export name available so anything importing Sequence from
+// this module doesn't break. Harmless no-op re-export.
+export { Sequence };

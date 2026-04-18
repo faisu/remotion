@@ -11,10 +11,22 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.86.1
         version: 0.86.1(zod@4.3.6)
+      '@remotion/captions':
+        specifier: 4.0.447
+        version: 4.0.447
       '@remotion/cli':
         specifier: 4.0.447
         version: 4.0.447(@swc/helpers@0.5.15)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      '@remotion/elevenlabs':
+        specifier: 4.0.447
+        version: 4.0.447
       '@remotion/google-fonts':
+        specifier: 4.0.447
+        version: 4.0.447(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      '@remotion/layout-utils':
+        specifier: 4.0.447
+        version: 4.0.447
+      '@remotion/media-utils':
         specifier: 4.0.447
         version: 4.0.447(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       '@remotion/paths':
@@ -29,6 +41,9 @@ importers:
       '@remotion/tailwind-v4':
         specifier: 4.0.447
         version: 4.0.447(@remotion/bundler@4.0.447(@swc/helpers@0.5.15)(react-dom@19.2.3(react@19.2.3))(react@19.2.3))(webpack@5.105.0)
+      '@remotion/transitions':
+        specifier: 4.0.447
+        version: 4.0.447(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       '@remotion/vercel':
         specifier: 4.0.447
         version: 4.0.447(@vercel/sandbox@1.6.0)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -826,6 +841,9 @@ packages:
       react: '>=16.8.0'
       react-dom: '>=16.8.0'
 
+  '@remotion/captions@4.0.447':
+    resolution: {integrity: sha512-MVMwnA2z2LfhKXIzBOYdtqRwvhdPOs+8QB7yjopHGNbPoYk0tYg+oF8XkLSjTSpHRh/z5YN34RdtrPeC0xDZIA==}
+
   '@remotion/cli@4.0.447':
     resolution: {integrity: sha512-+Ud8hJ9et0saWHn5gAUnKFOwYQ4Lcv6ebAcsKGPUPwdwDJigwkisyHmpwYtCm4jhYRtQlshdANgig+NmamrnKA==}
     hasBin: true
@@ -868,6 +886,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@remotion/elevenlabs@4.0.447':
+    resolution: {integrity: sha512-+Kvc4gcvZqis86hhNqNfWVCeEItM/wX8PuNN793e5MCtDKrcLxyuD7Ig3BiMafBykfA8K9hwslesMcV2xm+HGA==}
+
   '@remotion/eslint-plugin@4.0.447':
     resolution: {integrity: sha512-wjQFwZZdRmpdwaVD1+IBqhNttvlY11zwCHb+x7prQu2RZY65PGj1RLfsJ3tsBZqRJn9esL6Pg/34rbqkck5x+g==}
     peerDependencies:
@@ -875,6 +896,9 @@ packages:
 
   '@remotion/google-fonts@4.0.447':
     resolution: {integrity: sha512-gLqgktbTSQsVjKmY3Y0gxX9RjQsuaMvJtd+SWUSlXM/oHONtiY3gxM/UuZjFCsDuxk+lAblGd3tyRflqrSu8Dw==}
+
+  '@remotion/layout-utils@4.0.447':
+    resolution: {integrity: sha512-jbg4xBHOL6ro+5wx/c4AVeYhbtKdrN8kP642WeNAZ4RE056GUTRisS1z+IJYNwIsFcUCygeIoL6lKgw8AsaV9A==}
 
   '@remotion/licensing@4.0.447':
     resolution: {integrity: sha512-/pqArZCErkX0jVroK6tvTLuWpgFGiu/z5nTyCkaQogg6xvQKi7QQBXBb8mUJ/BvUeiWOUX/eVJ2khDGhSzQpUQ==}
@@ -928,6 +952,12 @@ packages:
     resolution: {integrity: sha512-6suVUMzF0/VZQLrPznPjKLT+AHBEe55+EtNZmZ+6A/ARmMe4RMtXYJgqE7R77TvN4+4BczQd5cx3DkkuGmgd0g==}
     peerDependencies:
       '@remotion/bundler': 4.0.447
+
+  '@remotion/transitions@4.0.447':
+    resolution: {integrity: sha512-b4VYIZp7CSAEBB10zQVfH+i6RG4ZBGcf6CpXgO3xthw2QOpMgZhk5Z0BAD0fGL0ORPg/tyC0wI99HLrzcam5aQ==}
+    peerDependencies:
+      react: '>=16.8.0'
+      react-dom: '>=16.8.0'
 
   '@remotion/vercel@4.0.447':
     resolution: {integrity: sha512-xzz6qWQkyeTWPNJoxfufB1KzV+zPmGSETndFDb9LpwcMH11wXO5h3P67OrycQNVJ/YPFfmT6b0zDI0Y5D8472g==}
@@ -3995,6 +4025,8 @@ snapshots:
       - webpack-cli
       - webpack-hot-middleware
 
+  '@remotion/captions@4.0.447': {}
+
   '@remotion/cli@4.0.447(@swc/helpers@0.5.15)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)':
     dependencies:
       '@remotion/bundler': 4.0.447(@swc/helpers@0.5.15)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -4041,6 +4073,10 @@ snapshots:
   '@remotion/compositor-win32-x64-msvc@4.0.447':
     optional: true
 
+  '@remotion/elevenlabs@4.0.447':
+    dependencies:
+      '@remotion/captions': 4.0.447
+
   '@remotion/eslint-plugin@4.0.447(eslint@9.19.0(jiti@2.6.1))(typescript@5.9.3)':
     dependencies:
       '@typescript-eslint/utils': 5.19.0(eslint@9.19.0(jiti@2.6.1))(typescript@5.9.3)
@@ -4055,6 +4091,8 @@ snapshots:
     transitivePeerDependencies:
       - react
       - react-dom
+
+  '@remotion/layout-utils@4.0.447': {}
 
   '@remotion/licensing@4.0.447': {}
 
@@ -4170,6 +4208,14 @@ snapshots:
       tailwindcss: 4.2.0
     transitivePeerDependencies:
       - webpack
+
+  '@remotion/transitions@4.0.447(react-dom@19.2.3(react@19.2.3))(react@19.2.3)':
+    dependencies:
+      '@remotion/paths': 4.0.447
+      '@remotion/shapes': 4.0.447(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      react: 19.2.3
+      react-dom: 19.2.3(react@19.2.3)
+      remotion: 4.0.447(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
 
   '@remotion/vercel@4.0.447(@vercel/sandbox@1.6.0)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)':
     dependencies:

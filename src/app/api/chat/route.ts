@@ -16,6 +16,10 @@ import {
   applyPlanMutation,
   type PlanAction,
 } from "../../../lib/plan-mutations";
+import {
+  generateVoiceoverWithTimestamps,
+  isElevenLabsConfigured,
+} from "../../../lib/elevenlabs";
 
 const LIMITS = {
   MAX_MESSAGES: 20,
@@ -74,7 +78,7 @@ function getChatErrorMessage(error: unknown): string {
 const generateVideoTool: Anthropic.Tool = {
   name: "generate_video",
   description:
-    "Generate a dynamic animated video with scene-by-scene storytelling using text and AI-generated images.",
+    "Generate a dynamic animated video with scene-by-scene storytelling using text, AI-generated images, per-scene narration, Ken Burns camera moves, scene transitions, and on-screen captions. Prefer create_video_plan first for review; use this only if the user says to skip planning or explicitly approves.",
   input_schema: {
     type: "object" as const,
     properties: {
@@ -109,6 +113,46 @@ const generateVideoTool: Anthropic.Tool = {
         type: "string",
         description: "Text color as a hex code (e.g., #ffffff for white, #1e293b for dark)",
       },
+      fontFamily: {
+        type: "string",
+        enum: [
+          "Inter",
+          "Instrument Serif",
+          "Space Grotesk",
+          "Geist Mono",
+          "Playfair Display",
+          "DM Sans",
+        ],
+        description:
+          "Global font family used for titles, body, and captions. Pick to match vibe: Inter/DM Sans (neutral/tech), Instrument Serif/Playfair Display (editorial/cinematic), Space Grotesk (product), Geist Mono (developer).",
+      },
+      aspectRatio: {
+        type: "string",
+        enum: ["16:9", "9:16", "1:1"],
+        description:
+          "Video aspect ratio. 16:9 for YouTube/landscape, 9:16 for Reels/Shorts/TikTok, 1:1 for feed posts.",
+      },
+      captionStyle: {
+        type: "string",
+        enum: ["none", "tiktok", "subtitle"],
+        description:
+          "How narration is shown on-screen. 'tiktok' = word-by-word pop captions (best for 9:16). 'subtitle' = traditional bottom subtitles. 'none' = no captions.",
+      },
+      voiceId: {
+        type: "string",
+        description:
+          "Optional ElevenLabs voice_id for narration. Omit unless the user has chosen a voice. Defaults to Rachel (warm female).",
+      },
+      musicGenre: {
+        type: "string",
+        enum: ["none", "cinematic", "upbeat", "ambient", "corporate", "tech"],
+        description: "Background music mood. 'none' disables music.",
+      },
+      musicIntensity: {
+        type: "string",
+        enum: ["low", "medium", "high"],
+        description: "Relative loudness of the music bed under narration.",
+      },
       items: {
         type: "array",
         items: { type: "string" },
@@ -127,6 +171,11 @@ const generateVideoTool: Anthropic.Tool = {
               items: { type: "string" },
               description: "Key points for this scene",
             },
+            voiceoverText: {
+              type: "string",
+              description:
+                "Conversational narration for this scene (~15-40 words; ~150 wpm pacing). Make durationInSeconds long enough to fit.",
+            },
             imagePrompt: {
               type: "string",
               description:
@@ -144,6 +193,35 @@ const generateVideoTool: Anthropic.Tool = {
             layout: {
               type: "string",
               enum: ["text", "image-left", "image-right", "image-background"],
+              description:
+                "Scene layout. Prefer 'image-background' when voiceoverText is set so the image + captions carry the scene.",
+            },
+            transitionIn: {
+              type: "string",
+              enum: [
+                "none",
+                "fade",
+                "slide-left",
+                "slide-right",
+                "slide-up",
+                "slide-down",
+                "wipe-left",
+                "wipe-right",
+                "iris",
+              ],
+              description:
+                "Transition INTO this scene. First scene should be 'none'. 'fade' is the safe default; 'iris' for reveals, 'wipe' for energetic cuts.",
+            },
+            kenBurns: {
+              type: "string",
+              enum: ["zoom-in", "zoom-out", "pan-left", "pan-right", "none"],
+              description:
+                "Subtle camera move applied to the scene image.",
+            },
+            emphasis: {
+              type: "string",
+              enum: ["hook", "point", "conclusion", "transition"],
+              description: "Narrative role of this scene.",
             },
           },
           required: ["title"],
@@ -183,7 +261,7 @@ const webSearchTool: Anthropic.Tool = {
 const createVideoPlanTool: Anthropic.Tool = {
   name: "create_video_plan",
   description:
-    "Create a video plan (storyboard) for the user to review before rendering. The plan includes scenes, style, colors, and image prompts. The user can edit the plan and then approve it to generate the video. Always use this tool FIRST when the user asks for a video — do NOT call generate_video directly unless the user explicitly says to skip planning or approves an existing plan.",
+    "Create a video plan (storyboard) for the user to review before rendering. The plan includes scenes, style, colors, image prompts, per-scene voiceover text, scene transitions, and a global font + caption style. The user can edit the plan and then approve it to generate the video. Always use this tool FIRST when the user asks for a video — do NOT call generate_video directly unless the user explicitly says to skip planning or approves an existing plan.",
   input_schema: {
     type: "object" as const,
     properties: {
@@ -219,31 +297,114 @@ const createVideoPlanTool: Anthropic.Tool = {
         type: "string",
         description: "Text color hex code",
       },
+      fontFamily: {
+        type: "string",
+        enum: [
+          "Inter",
+          "Instrument Serif",
+          "Space Grotesk",
+          "Geist Mono",
+          "Playfair Display",
+          "DM Sans",
+        ],
+        description:
+          "Google Font used for titles, body, and captions. Match vibe: Inter/DM Sans for neutral/tech, Instrument Serif/Playfair Display for editorial/cinematic, Space Grotesk for product, Geist Mono for developer tools.",
+      },
+      aspectRatio: {
+        type: "string",
+        enum: ["16:9", "9:16", "1:1"],
+        description:
+          "Video aspect ratio. 16:9 for YouTube/landscape, 9:16 for Reels/Shorts/TikTok, 1:1 for feed posts.",
+      },
+      captionStyle: {
+        type: "string",
+        enum: ["none", "tiktok", "subtitle"],
+        description:
+          "How narration is shown on screen. 'tiktok' = word-by-word big pop-in captions (best for short-form). 'subtitle' = traditional bottom subtitles. 'none' = no captions. Pick 'tiktok' by default when there is a voiceover and aspect ratio is 9:16.",
+      },
+      voiceId: {
+        type: "string",
+        description:
+          "Optional ElevenLabs voice_id. Omit unless the user has specified a voice. Examples: '21m00Tcm4TlvDq8ikWAM' (Rachel, warm female), 'ErXwobaYiN019PkySvjV' (Antoni, warm male), 'VR6AewLTigWG4xSOukaG' (Arnold, deep male).",
+      },
+      musicGenre: {
+        type: "string",
+        enum: ["none", "cinematic", "upbeat", "ambient", "corporate", "tech"],
+        description:
+          "Mood for the background music bed. 'none' disables music. Pick based on content tone, not just the topic.",
+      },
+      musicIntensity: {
+        type: "string",
+        enum: ["low", "medium", "high"],
+        description: "Relative loudness/drive of the music under narration.",
+      },
       scenes: {
         type: "array",
-        description: "Planned scene list for the storyboard",
+        description:
+          "Planned scene list for the storyboard. Aim for 4-6 scenes for short, 8-12 for detailed. Each scene should stand on its own as a ~3-8 second clip.",
         items: {
           type: "object",
           properties: {
-            title: { type: "string", description: "Scene title" },
-            body: { type: "string", description: "Scene body text" },
+            title: { type: "string", description: "Scene title (on-screen, terse, max ~8 words)" },
+            body: {
+              type: "string",
+              description:
+                "Supporting on-screen text (one line). Leave short — the voiceover does the heavy lifting. Can be empty if voiceoverText is set.",
+            },
             bullets: {
               type: "array",
               items: { type: "string" },
-              description: "Key points for this scene",
+              description:
+                "Key points for this scene, max 6. Only include for bullet-heavy layouts; leave empty when the scene has a voiceover to avoid double-reading.",
+            },
+            voiceoverText: {
+              type: "string",
+              description:
+                "What the narrator will say during this scene, in a natural conversational register (different from the terse on-screen title/bullets). Write as flowing sentences, ~15-40 words per scene. Pace is ~150 words/minute, so a 6-second scene fits ~15 words. Set durationInSeconds long enough to accommodate the voiceover.",
             },
             imagePrompt: {
               type: "string",
               description:
-                "Search query for the scene image. Write as a web image search query.",
+                "Search query for the scene image. Write as a web image search query with concrete visual nouns (e.g. 'aerial view of Tokyo skyline at sunset'). Avoid style words like 'illustration' or 'cinematic'.",
             },
             layout: {
               type: "string",
               enum: ["text", "image-left", "image-right", "image-background"],
+              description:
+                "Scene layout. 'image-background' is best when voiceover is present; lets the image + captions dominate.",
+            },
+            transitionIn: {
+              type: "string",
+              enum: [
+                "none",
+                "fade",
+                "slide-left",
+                "slide-right",
+                "slide-up",
+                "slide-down",
+                "wipe-left",
+                "wipe-right",
+                "iris",
+              ],
+              description:
+                "Transition INTO this scene from the previous one. First scene should usually be 'none'. Use 'fade' or 'slide-left' for most story beats, 'iris' for conclusion/reveal moments, 'wipe' for energetic moments.",
+            },
+            kenBurns: {
+              type: "string",
+              enum: ["zoom-in", "zoom-out", "pan-left", "pan-right", "none"],
+              description:
+                "Subtle camera move applied to the scene's image. 'zoom-in' for intros and beats, 'zoom-out' for reveals, pans to give lateral energy.",
+            },
+            emphasis: {
+              type: "string",
+              enum: ["hook", "point", "conclusion", "transition"],
+              description:
+                "What role this scene plays narratively. First scene is usually 'hook', last is 'conclusion'.",
             },
             durationInSeconds: {
               type: "number",
-              description: "Scene duration in seconds",
+              description:
+                "Scene duration in seconds. Must fit voiceoverText at ~150 wpm; if narrated, prefer >= (word_count / 2.5) seconds.",
             },
             notes: {
               type: "string",
@@ -665,12 +826,54 @@ function buildVideoPlan(
     imagePrompt: (s.imagePrompt as string) || "",
     durationInSeconds: (s.durationInSeconds as number) || defaultDuration,
     notes: (s.notes as string) || undefined,
+    voiceoverText: (s.voiceoverText as string) || undefined,
+    transitionIn: (s.transitionIn as
+      | "fade"
+      | "slide-left"
+      | "slide-right"
+      | "slide-up"
+      | "slide-down"
+      | "wipe-left"
+      | "wipe-right"
+      | "iris"
+      | "none"
+      | undefined) || (i === 0 ? "none" : "fade"),
+    emphasis: (s.emphasis as "hook" | "point" | "conclusion" | "transition" | undefined) || undefined,
+    kenBurns: (s.kenBurns as
+      | "zoom-in"
+      | "zoom-out"
+      | "pan-left"
+      | "pan-right"
+      | "none"
+      | undefined) || "zoom-in",
   }));
 
   const estimatedDuration = scenes.reduce(
     (sum, s) => sum + s.durationInSeconds,
     0,
   );
+
+  const imageAssets = scenes
+    .filter((s) => s.imagePrompt)
+    .map((s) => ({
+      id: `asset-${s.id}`,
+      type: "image" as const,
+      prompt: s.imagePrompt,
+      source: "pending",
+      sceneId: s.id,
+      status: "pending" as const,
+    }));
+
+  const voiceoverAssets = scenes
+    .filter((s) => s.voiceoverText)
+    .map((s) => ({
+      id: `voice-${s.id}`,
+      type: "voiceover" as const,
+      prompt: s.voiceoverText!,
+      source: "pending",
+      sceneId: s.id,
+      status: "pending" as const,
+    }));
 
   return VideoPlan.parse({
     id: planId,
@@ -686,16 +889,33 @@ function buildVideoPlan(
     },
     estimatedDuration,
     scenes,
-    assets: scenes
-      .filter((s) => s.imagePrompt)
-      .map((s) => ({
-        id: `asset-${s.id}`,
-        type: "image",
-        prompt: s.imagePrompt,
-        source: "pending",
-        sceneId: s.id,
-        status: "pending",
-      })),
+    assets: [...imageAssets, ...voiceoverAssets],
+    fontFamily: (input.fontFamily as
+      | "Inter"
+      | "Instrument Serif"
+      | "Space Grotesk"
+      | "Geist Mono"
+      | "Playfair Display"
+      | "DM Sans"
+      | undefined) || "Inter",
+    aspectRatio: (input.aspectRatio as "16:9" | "9:16" | "1:1" | undefined) || "16:9",
+    captionStyle: (input.captionStyle as "none" | "tiktok" | "subtitle" | undefined) || "tiktok",
+    narration: {
+      enabled: (input.narrationEnabled as boolean | undefined) ?? true,
+      voiceId: (input.voiceId as string | undefined) || undefined,
+    },
+    music: {
+      genre: (input.musicGenre as
+        | "none"
+        | "cinematic"
+        | "upbeat"
+        | "ambient"
+        | "corporate"
+        | "tech"
+        | undefined) || "none",
+      intensity: (input.musicIntensity as "low" | "medium" | "high" | undefined) || "low",
+      volume: 0.15,
+    },
   });
 }
 
@@ -740,6 +960,74 @@ async function attachThumbnailsToPlan(
   return { ...plan, scenes: updatedScenes, assets: updatedAssets };
 }
 
+/**
+ * Generate voiceover audio + word-level captions for every scene whose
+ * `voiceoverText` is set. Uploads audio to Vercel Blob and stores URLs in
+ * the scene so the renderer can use them. Runs scenes in parallel to keep
+ * wall-clock time low.
+ */
+async function attachVoiceoversToProps(
+  props: DynamicVideoPropsType,
+  send: (event: ChatEvent) => void,
+): Promise<DynamicVideoPropsType> {
+  if (!isElevenLabsConfigured()) return props;
+  if (props.narration && props.narration.enabled === false) return props;
+
+  const scenesNeedingVoiceover = props.scenes.filter((s) => s.voiceoverText);
+  if (scenesNeedingVoiceover.length === 0) return props;
+
+  send({
+    type: "render_progress",
+    phase: `Generating narration for ${scenesNeedingVoiceover.length} scene(s)...`,
+    progress: 0.02,
+  });
+
+  const voiceId = props.narration?.voiceId;
+
+  const results = await Promise.allSettled(
+    props.scenes.map(async (scene) => {
+      if (!scene.voiceoverText) return scene;
+      try {
+        const result = await generateVoiceoverWithTimestamps({
+          text: scene.voiceoverText,
+          voiceId,
+        });
+        // Lengthen the scene if the narration overruns its planned duration
+        // so we don't clip audio. Cap at 20s per schema constraint.
+        const minDurationSeconds = result.durationMs / 1000 + 0.4;
+        const nextDuration = Math.min(
+          20,
+          Math.max(scene.durationInSeconds ?? 3, minDurationSeconds),
+        );
+        return {
+          ...scene,
+          voiceoverUrl: result.audioUrl,
+          voiceoverDurationMs: result.durationMs,
+          captions: result.captions,
+          durationInSeconds: nextDuration,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "voiceover error";
+        send({
+          type: "render_progress",
+          phase: `Narration failed for "${scene.title}": ${message}`,
+          progress: 0.03,
+        });
+        return scene;
+      }
+    }),
+  );
+
+  const nextScenes = results.map((r, i) =>
+    r.status === "fulfilled" ? r.value : props.scenes[i],
+  );
+
+  return DynamicVideoProps.parse({
+    ...props,
+    scenes: nextScenes,
+  });
+}
+
 function expandScenesByMode(props: DynamicVideoPropsType): DynamicVideoPropsType {
   const minSceneCountByMode = {
     short: 4,
@@ -773,6 +1061,9 @@ function expandScenesByMode(props: DynamicVideoPropsType): DynamicVideoPropsType
       layout: index % 2 === 0 ? "image-left" : "image-right",
       imagePrompt: `${baseTopic} ${seedBullet} high quality photo`,
       durationInSeconds: props.mode === "detailed" ? 4 : props.mode === "narrated" ? 6 : 3,
+      captions: [],
+      transitionIn: index === 1 && generatedScenes.length === 0 ? "none" : "fade",
+      kenBurns: "zoom-in",
     });
   }
 
@@ -847,7 +1138,8 @@ export async function POST(req: Request) {
         const approvedInput = DynamicVideoProps.parse(
           videoPlanToDynamicProps(approvedPlan),
         );
-        const enrichedInput = await attachGeneratedImages(approvedInput, send);
+        const withImages = await attachGeneratedImages(approvedInput, send);
+        const enrichedInput = await attachVoiceoversToProps(withImages, send);
         send({
           type: "tool_start",
           name: "generate_video",
@@ -871,35 +1163,75 @@ export async function POST(req: Request) {
       let toolLoopCount = 0;
 
       while (true) {
-        const response = await client.messages.create({
+        const stream = client.messages.stream({
           model: "claude-sonnet-4-6",
           max_tokens: 4096,
-          system: `You are a helpful AI assistant that can chat naturally and also generate dynamic animated videos using Remotion.
+          system: `You are a helpful AI assistant that can chat naturally and also direct short, cinematic videos using Remotion. Think of yourself less as a slide-builder and more as a creative director: every scene should have a clear role, a narration, a strong image, and an intentional camera move / transition.
 
-VIDEO CREATION WORKFLOW — TWO PHASES:
-1. PLAN PHASE: When a user asks to create a video, ALWAYS use the create_video_plan tool FIRST. This creates a storyboard the user can review, edit, and approve before rendering.
-2. RENDER PHASE: Only use generate_video when the user explicitly approves a plan (e.g. "looks good, generate it", "render it", "go ahead") or if the message contains "[PLAN_APPROVED]" with plan data. If the user says "skip planning" or "just generate it", you may use generate_video directly.
-3. ARTIFACT EDIT PHASE: If the user asks to modify planned scenes, graphics, order, timing, style, or colors, use edit_video_plan to mutate the existing storyboard artifact.
+VIDEO CREATION WORKFLOW — THREE PHASES:
+1. PLAN PHASE: When a user asks to create a video, ALWAYS call create_video_plan FIRST. This creates a storyboard the user can review, edit, and approve before rendering.
+2. ARTIFACT EDIT PHASE: If the user asks to modify scenes, images, order, timing, style, colors, narration, transitions, or captions, call edit_video_plan to mutate the existing storyboard.
+3. RENDER PHASE: Only call generate_video when the user explicitly approves a plan (e.g. "looks good, generate it", "render it", "go ahead") or when the message contains "[PLAN_APPROVED]". If the user says "skip planning" or "just generate it", you may call generate_video directly.
 
-When creating a plan, be thorough:
-- Include 4-12 scenes depending on mode (short=4-6, detailed=8-12, narrated=4-6)
-- Each scene needs a title, body text, and imagePrompt
-- Write imagePrompt as specific search queries (e.g. "aerial view of Tokyo skyline at sunset" not "city illustration")
-- Add notes to explain the reasoning behind creative choices
-- Choose appropriate layouts: "text" for text-heavy, "image-left"/"image-right" for split, "image-background" for cinematic
-${isBraveSearchConfigured() ? "\nYou have access to a web_search tool. Use it to research factual topics, recent events, or any subject where up-to-date information would improve the video content. Search before creating a plan when the topic benefits from current data." : ""}
+WHEN BUILDING A PLAN — DO ALL OF THE FOLLOWING:
 
-Color palette ideas:
+Scene count & pacing
+- short=4-6 scenes, detailed=8-12, narrated=4-6.
+- Each scene should stand on its own as a ~3-8 second clip.
+- Scene duration MUST accommodate voiceoverText at ~150 wpm (≈ 2.5 words / second). If a scene's narration is 15 words, the scene needs at least 6 seconds.
+
+Narration (voiceoverText)
+- Write a natural conversational line for every scene in voiceoverText — this is what ElevenLabs will speak. It is DIFFERENT from the on-screen title/body (which should stay terse).
+- Keep it ~15-40 words per scene. Use contractions, active voice, and one clear idea per scene.
+- First scene's narration is the HOOK: pull attention in 1 sentence. Last scene is the CONCLUSION: include a takeaway or call to reflect.
+- If narration is set, prefer layout "image-background" so captions + image carry the scene, and avoid bullets (they'd double-read).
+
+Imagery (imagePrompt)
+- Write each imagePrompt as a concrete web image search query with visual nouns. Good: "aerial view of Tokyo skyline at sunset", "macro photo of honeybee on lavender". Bad: "cinematic illustration of technology".
+- Prefer variety across scenes (wide → medium → close, or outside → inside → detail) to avoid monotony.
+
+Camera moves (kenBurns) — pick per scene, don't leave them all the same
+- "zoom-in" for establishing and emotional beats.
+- "zoom-out" for reveals and conclusions.
+- "pan-left" / "pan-right" for lateral motion, comparisons, or traveling energy.
+- "none" when the image is already dynamic or text-heavy.
+
+Transitions (transitionIn) — first scene MUST be "none"
+- "fade" is the safe default — use it for most story beats.
+- "slide-left" / "slide-right" for sequential progression ("next", "then").
+- "slide-up" / "slide-down" for stacking ideas or upward momentum.
+- "wipe-left" / "wipe-right" for energetic cuts, lists, or quick beats.
+- "iris" for reveals, conclusions, or "here's the twist" moments.
+- Vary them — don't use the same transition 6 times in a row.
+
+Emphasis (emphasis) — label each scene's narrative role
+- First scene: "hook". Middle scenes: "point" or "transition". Last scene: "conclusion".
+
+Global style
+- fontFamily: Inter/DM Sans for neutral or tech, Instrument Serif/Playfair Display for editorial or cinematic, Space Grotesk for product, Geist Mono for dev tools.
+- aspectRatio: 16:9 for YouTube/landscape, 9:16 for Reels/Shorts/TikTok, 1:1 for feed posts. Ask (or infer) before committing.
+- captionStyle: default to "tiktok" when aspectRatio is 9:16 and narration is on. Use "subtitle" for long-form 16:9. Use "none" only if the user wants silent/pure-visual.
+- musicGenre + musicIntensity: pick to match tone ("cinematic"+"medium" for dramatic, "upbeat"+"high" for energetic, "ambient"+"low" for calm/explanatory). Default to "none" unless content clearly benefits.
+
+Color palette ideas
 - Dark tech: backgroundColor=#0f172a, accentColor=#6366f1, textColor=#ffffff
 - Warm sunset: backgroundColor=#1a0a00, accentColor=#f97316, textColor=#fef3c7
 - Ocean: backgroundColor=#0c1445, accentColor=#06b6d4, textColor=#e0f7ff
 - Nature: backgroundColor=#052e16, accentColor=#22c55e, textColor=#dcfce7
 - Minimal light: backgroundColor=#ffffff, accentColor=#6366f1, textColor=#0f172a
+${isBraveSearchConfigured() ? "\nYou have access to a web_search tool. Use it to research factual topics, recent events, or any subject where up-to-date information would improve the video. Search before creating a plan when the topic benefits from current data.\n" : ""}
+AFTER CREATING A PLAN
+- Run a quick plan check and ask 1-2 clarifying questions only when key constraints are genuinely ambiguous (audience, tone, required facts, branding, aspect ratio). Do NOT push for approval until the user answers or says to proceed.
 
-After creating a plan, run a plan check and ask 1-2 clarifying questions when key constraints are ambiguous (audience, tone, required facts, branding, duration). Do not push for approval until the user answers or says to proceed.
-When rendering from an approved plan, preserve image parity: for each scene, pass imageUrl from that scene's previewImageUrl in the approved plan.
-After editing a plan, summarize what changed and ask whether to keep refining or approve.
-After generating a video, tell the user it's ready and describe what was created.`,
+WHEN RENDERING FROM AN APPROVED PLAN
+- Preserve image parity: for each scene pass imageUrl from that scene's previewImageUrl.
+- Voiceover + captions are generated automatically from each scene's voiceoverText — you don't need to add them manually.
+
+AFTER EDITING A PLAN
+- Summarize what changed in one or two sentences and ask whether to keep refining or approve.
+
+AFTER GENERATING A VIDEO
+- Tell the user it's ready and describe what was created (tone, structure, standout beats).`,
           tools: [
             createVideoPlanTool,
             editVideoPlanTool,
@@ -909,12 +1241,13 @@ After generating a video, tell the user it's ready and describe what was created
           messages: apiMessages,
         });
 
-        // Stream text content
-        for (const block of response.content) {
-          if (block.type === "text" && block.text) {
-            send({ type: "text_delta", text: block.text });
-          }
-        }
+        // Forward token-level text deltas to the client as they arrive
+        // from the model — this is what makes responses appear live.
+        stream.on("text", (delta) => {
+          if (delta) send({ type: "text_delta", text: delta });
+        });
+
+        const response = await stream.finalMessage();
 
         if (response.stop_reason === "end_turn") {
           break;
@@ -983,7 +1316,8 @@ After generating a video, tell the user it's ready and describe what was created
               try {
                 const normalizedInput = DynamicVideoProps.parse(input);
                 const expandedInput = expandScenesByMode(normalizedInput);
-                const enrichedInput = await attachGeneratedImages(expandedInput, send);
+                const withImages = await attachGeneratedImages(expandedInput, send);
+                const enrichedInput = await attachVoiceoversToProps(withImages, send);
 
                 send({
                   type: "tool_start",
